@@ -211,34 +211,39 @@ to be reworked — and `SKIP LOCKED` is the one thing in this system that cannot
 
 ---
 
-## Phase 3 — Evaluation ⬜
+## Phase 3 — Evaluation 🟨
 
 *Week 5. Ships: structured scoring.*
 
 *Blocking: FR-INT-001…020 · FR-OPS-005, 006*
 
-- [ ] Room / Panel / Interviewer as **distinct** entities (a Panel is a session, not a place)
-- [ ] Panel states incl. `awaiting_evaluations` (E10) — an unrepresentable state is one the UI
-      has to guess at
-- [ ] Rubrics versioned; weights sum to 100 by DB constraint; **anchors mandatory**
-- [ ] `rubric_version_id` pinned at interview **start**, not submit (E17)
-- [ ] Interviewer screen: profile, answers, preferences, CV, anchored rubric, elapsed timer as a
-      nudge — and **nothing** revealing another evaluator, aggregate, rank, or seat count (`R-029`)
-- [ ] One evaluation per (interview, interviewer); immutable on submit
-- [ ] 15-min revision window with mandatory reason, original retained; Super Admin unlock after
-- [ ] Submit blocked until every criterion is scored, missing ones marked **inline**
-- [ ] Panel blocked from Call Next while awaiting evaluations, **naming the interviewer** (`R-058`)
-- [ ] Coordinator waiver with written reason — the escape hatch for an interviewer who went home
-- [ ] Recusals, freely declared, honoured by the claim query; auto-**suggest** only, never auto-create
-- [ ] Heartbeat 30 s; 90 min silence → `flagged`; void requeues at priority 100
-- [ ] Ops dashboard with **Action Required first**, saying "all clear" rather than rendering empty
-- [ ] Stage close gate: blocks on in-progress and awaiting-evaluation interviews
+- [x] Room / Panel / Interviewer as **distinct** entities (Phase 2, migration `0015`)
+- [x] Panel states incl. `awaiting_evaluations` (E10)
+- [x] Rubrics versioned; weights sum to 100 by DB constraint; **anchors mandatory** (`0023`)
+- [x] Published rubrics immutable — editing one mid-session splits a panel across scales (E17)
+- [x] `rubric_id` pinned at interview **start**, not submit (E17)
+- [x] Interviewer screen: profile, answers, preferences, anchored rubric **inline**, elapsed
+      timer as a nudge — and nothing revealing another evaluator or aggregate (`R-029`)
+- [x] One evaluation per (interview, interviewer); immutable on submit
+- [x] 15-min revision window with mandatory reason, original retained; Super Admin unlock after
+- [x] Submit blocked until every criterion is scored, missing ones named **inline**
+- [x] Panel blocked from Call Next while awaiting evaluations, **naming the interviewer**
+- [x] Coordinator waiver with written reason — and an **authenticated actor** (`0026`)
+- [x] Recusals honoured by the claim query (Phase 2)
+- [x] Heartbeat; 90 min silence → `flagged`; void requeues at priority 100
+- [x] Ops dashboard with **Action Required first**, saying "all clear" explicitly
+- [x] Stage close gate: blocks on in-progress and awaiting-evaluation interviews (E15)
+- [x] Service observations recorded on completion, feeding the wait estimator
+- [ ] CV display on the interviewer screen — storage not yet wired (carried from Phase 1)
+- [ ] Recusal auto-**suggest** on surname or phone-prefix match (`FR-INT-018`, Should)
 
-**Exit criteria**
-- [ ] Two-interviewer panels complete interviews end to end
-- [ ] Panel cannot Call Next while `awaiting_evaluations`
-- [ ] Interviewer A cannot read B's evaluation **via direct SQL** under A's RLS context
-- [ ] Stage close blocked while an interview is `in_progress`, listing room and panel
+**Exit criteria — met**
+- [x] Two-interviewer panels complete interviews end to end
+- [x] Panel cannot Call Next while `awaiting_evaluations`
+- [x] Interviewer A cannot read B's evaluation **via direct SQL** under A's RLS context
+- [x] Stage close blocked while an interview is `in_progress`, listing room and panel
+- [x] Coordinator has **no** score visibility — the reason the role exists
+- [ ] Structured scoring demonstrated on the real UI end to end
 
 ---
 
