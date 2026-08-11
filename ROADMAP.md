@@ -126,8 +126,8 @@ exists to look at it.
 | ✅ **2A** | Event schema | stages, check_ins, panels, panel_members, panel_tracks, queue_entries, recusals, interviews · Ed25519 keypair per cycle | Migrations apply; RLS fail-closed extends to every new table |
 | ✅ **2B** | **Queue engine** | `fn_claim_next` with `SKIP LOCKED` + `NOT EXISTS`; priority tiers; grace/skip/park; `fn_queue_transition` as state owner | **20 concurrent Call Next → 20 distinct applicants**; a NULL in `recusals` does not stall the queue |
 | ✅ **2C** | Identity & check-in | Ed25519 sign/verify; four-layer verification; `fn_check_in` idempotent, one per stage | Same QR on two devices → one `check_ins` row; a prior cycle's token fails |
-| 🟨 **2D** | Staff auth | Supabase Auth, session→membership binding, TOTP for Coordinator/Admin/Super Admin, per-endpoint 403 matrix | The endpoint matrix deferred from Phase 1 |
-| 🟨 **2E** | Surfaces | Scanner PWA, panel screen, applicant live status, public display board, realtime + degradation ladder | Full dry run: register → check in → call → grace → skip → park → reactivate |
+| ✅ **2D** | Staff auth | Supabase Auth, session→membership binding, TOTP for Coordinator/Admin/Super Admin, per-endpoint 403 matrix | The endpoint matrix deferred from Phase 1 |
+| ✅ **2E** | Surfaces | Scanner PWA, panel screen, applicant live status, public display board, realtime + degradation ladder | Full dry run: register → check in → call → grace → skip → park → reactivate |
 
 **2B before 2C is deliberate.** Check-in is the visible part and the tempting place to start,
 but it only feeds the queue. If the claim semantics are wrong, every screen built on top has
@@ -149,7 +149,8 @@ to be reworked — and `SKIP LOCKED` is the one thing in this system that cannot
 - [x] Four-layer verification: format → roster hash → Ed25519 → server
 - [x] Previous cycle's token fails signature verification against the current cycle
 - [x] Constant-time hash comparison
-- [ ] Rate limit 10/min/IP — needs middleware, lands with the scanner PWA
+- [x] Rate limit 10/min/IP via middleware — ⚠ in-memory, so **per-instance** on Vercel.
+      Move to a shared counter before the event (Phase 5).
 
 **Check-in** — ✅ backend verified, scanner UI outstanding
 - [x] One check-in per applicant per stage, enforced by DB constraint
@@ -158,9 +159,11 @@ to be reworked — and `SKIP LOCKED` is the one thing in this system that cannot
 - [x] Track with no open panel → check in, **suppress ETA**, raise ops alert
 - [x] Withdrawn / screened-out refused; closed stage refused
 - [x] Roster bundle: token hashes only, no names or key material (`FR-CHK-018`)
-- [ ] Scanner PWA: persistent camera, zero-tap success, 2.5 s auto-clear
-- [ ] Manual search UI: any 4 ID digits, last 4 phone digits, or partial name
-- [ ] Register-and-check-in in one screen, ≤30 s, flagged `needs_completion`
+- [x] Scanner PWA: persistent camera, zero-tap success, 2.5 s auto-clear
+- [x] Manual search UI: any 4 ID digits, last 4 phone digits, or partial name
+- [x] Native BarcodeDetector with zxing-wasm fallback (iOS Safari has no BarcodeDetector)
+- [ ] Register-and-check-in in one screen, ≤30 s, flagged `needs_completion` — **deferred**;
+      the `needs_completion` flag and backend path exist, the one-screen form does not
 
 **Queue engine** — migrations `0015`–`0017`, ✅ verified
 - [x] Pull-based claim, `FOR UPDATE SKIP LOCKED` + `NOT EXISTS` recusals (`R-013`)
@@ -179,10 +182,23 @@ to be reworked — and `SKIP LOCKED` is the one thing in this system that cannot
 - [ ] Suppressed for first 15 min of a stage and when the track has no open panel
 - [ ] Below position 3 → "You're next", no number
 
-**Surfaces**
-- [ ] Applicant status page live; **called state takes over the full viewport**
-- [ ] Public display board — IDs and rooms only, excluded at the publisher (`R-028`)
-- [ ] Realtime with degradation ladder; connection indicator + last-updated on every live surface
+**Surfaces** — ✅ verified
+- [x] Applicant status page live; **called state takes over the full viewport**
+- [x] Public display board — IDs and rooms only, excluded at the publisher (`R-028`)
+- [x] Degradation ladder: polling + backoff, last-known value retained, connection indicator
+      and last-updated instant on every live surface
+- [x] Panel screen: idle / called / blocked, naming the outstanding interviewer
+- [ ] Websocket layer (Supabase Realtime) — polling is the required fallback and ships first;
+      sockets are an optimisation on top
+
+**Exit criteria**
+- [x] 20 concurrent Call Next → 20 **distinct** applicants, zero double assignments
+- [x] Same QR scanned on two devices → exactly one `check_ins` row
+- [x] A recusal row containing NULL does **not** stall the queue
+- [x] Wait estimate rises with a stated cause when a panel closes — verified live
+- [x] Display board provably carries no names
+- [ ] Full dry run through skip → park → reactivate on the real UI
+- [ ] p95 latency measurement under the NFR-SCAL-001 profile
 
 **Exit criteria**
 - [ ] 20 concurrent Call Next → 20 **distinct** applicants, zero double assignments
