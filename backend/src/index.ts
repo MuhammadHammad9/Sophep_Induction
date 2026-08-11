@@ -11,8 +11,13 @@ export * from './domain/normalisation'
 export * from './domain/errors'
 export * from './domain/schemas'
 export * from './domain/cv'
+export * from './domain/crypto'
+export * from './domain/verification'
+export * from './domain/waitEstimate'
 
 // Services — database access, all RLS-context-bound
 export * from './services/db'
 export * from './services/registration'
 export * from './services/notifications'
+export * from './services/checkin'
+export * from './services/queue'
