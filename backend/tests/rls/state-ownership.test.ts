@@ -147,10 +147,12 @@ describe('audit integrity (FR-AUD-001..003)', () => {
       SELECT fn_register_applicant(
         ${fx.cycleId}::uuid, 'Twin One', 'twin@example.com', '03005550001', 'online')
     `
+    // Argument order is (cycle, name, email, phone, source, roll_number, answers,
+    // preferences, override_reason) — roll_number comes BEFORE answers.
     const [twin] = await sql<Array<{ id: string }>>`
       SELECT id FROM fn_register_applicant(
         ${fx.cycleId}::uuid, 'Twin Two', 'twin@example.com', '03005550002',
-        'walkin_digital', '{}'::jsonb, NULL,
+        'walkin_digital', NULL, '{}'::jsonb, NULL,
         'Confirmed with both students at the desk, genuinely different people')
     `
 
@@ -218,7 +220,7 @@ describe('duplicate detection and the override branch (E4)', () => {
     const [second] = await sql<Array<{ id: string; display_id: string }>>`
       SELECT id, display_id FROM fn_register_applicant(
         ${fx.cycleId}::uuid, 'Sibling B', 'shared@example.com', '03007770002',
-        'walkin_digital', '{}'::jsonb, NULL,
+        'walkin_digital', NULL, '{}'::jsonb, NULL,
         'Siblings sharing one family email address, confirmed at the desk')
     `
 
