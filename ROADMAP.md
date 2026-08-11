@@ -24,11 +24,16 @@ complete only when its exit criteria demonstrably pass (`R-055`).
 - [x] CI workflow — typecheck, lint, test, **plus RLS and concurrency gates against a real Postgres**
 - [x] `.env.example` documenting every secret, none committed
 
-**Remaining — needs credentials or a network install**
-- [ ] `npm install` (not yet run — see OneDrive note below)
-- [ ] Next.js app entry: `layout.tsx`, `page.tsx`, `globals.css`, `next.config.ts`, PostCSS
+- [x] `npm install` — **0 vulnerabilities** after upgrading Next 15→16 and Vitest 2→4
+      (both carried high/critical transitive CVEs; NFR-SEC-010 fails a build on those)
+- [x] Next.js app entry, PostCSS, ESLint flat config
+- [x] Vitest configured for both workspaces
+- [x] `npm run build` green — 6 routes
+- [x] `npm run typecheck` and `npm run lint` green
+
+**Remaining — needs credentials**
 - [ ] Supabase project linked (`supabase link`) — needs your project ref and access token
-- [ ] Vitest + Playwright config files
+- [ ] Playwright config + first e2e test
 - [ ] Vercel project connected — needs your auth
 - [ ] OneDrive sync exclusions verified against a clean `npm ci` + build
 
@@ -37,39 +42,66 @@ applies and rolls back · a Vercel preview builds from a branch.
 
 ---
 
-## Phase 1 — Cycles, identity, registration ⬜
+## Phase 1 — Cycles, identity, registration 🟨
 
 *Week 1–2. Ships: **you can accept applications**.*
+
+> ### ⚠ VERIFICATION STATUS — read before trusting anything below
+>
+> **Written and statically verified:** typecheck, lint and build are green; 48 unit tests pass.
+>
+> **NOT yet executed:** the 11 SQL migrations and the 45 database tests covering RLS, state
+> ownership, audit immutability, dedupe override and concurrency. They need a real Postgres,
+> and this machine has no Docker, no local Postgres, and no `DATABASE_URL`.
+>
+> So every checkbox below marked *(unverified)* means "the code exists and compiles", NOT
+> "it works". Per R-055 a phase is complete only when its exit criteria demonstrably pass —
+> **Phase 1 is not complete.**
+>
+> **First thing to do when a database is available:**
+> ```
+> npm run db:migrate && npm run db:seed && npm test
+> ```
+>
+> **Top risk to check first:** `fn_register_applicant` is `SECURITY DEFINER` while `applicants`
+> has `FORCE ROW LEVEL SECURITY`. It currently relies on its owning role holding `BYPASSRLS`
+> to satisfy the insert policy. If the owner lacks that attribute, public registration will
+> fail closed with a policy violation. This is the most likely first failure and the fix is a
+> narrow insert policy for the definer path, not a broader grant.
 
 *Blocking: FR-CYC-001…007, 012, 013 · FR-IDT-001…006 · FR-REG-001…013 · FR-RBAC-001…010 ·
 FR-AUD-001…003 · DR-001…006*
 
-**Schema**
-- [ ] `citext` + `pg_trgm`; `norm_email` / `norm_phone` as real `IMMUTABLE` functions (E6)
-- [ ] societies, cycles, stages, departments, tracks, rooms, users, memberships
-- [ ] applicants, applicant_preferences, access_tokens, audit_events
-- [ ] **Partial** unique indexes excluding overridden/withdrawn rows (E4) — a plain unique index
-      makes the documented override branch impossible
-- [ ] Enum states as DB types, not application convention (DR-003)
+**Schema** — migrations `0001`–`0011`
+- [x] `citext` + `pg_trgm`; `norm_email` / `norm_phone` as real `IMMUTABLE` functions (E6) *(unverified)*
+- [x] societies, cycles, stages, departments, tracks, rooms, users, memberships *(unverified)*
+- [x] applicants, applicant_preferences, access_tokens, audit_events *(unverified)*
+- [x] **Partial** unique indexes excluding overridden/withdrawn rows (E4) *(unverified)*
+- [x] Enum states as DB types, not application convention (DR-003) *(unverified)*
 
 **Security**
-- [ ] RLS on every table from day one, fail-closed (`R-014`)
-- [ ] Six roles; capabilities are the **union** across a user's roles in a cycle (E13)
-- [ ] Audit append-only; `UPDATE`/`DELETE` revoked; written in-transaction (`R-011`)
-- [ ] TOTP for Coordinator/Admin/Super Admin
+- [x] RLS on every table from day one, fail-closed (`R-014`) *(unverified)*
+- [x] `rms_app` role with `NOBYPASSRLS` + `SET LOCAL ROLE` per transaction — without this the
+      policies are decorative whenever the pool authenticates as a privileged role *(unverified)*
+- [x] Six roles; capabilities are the **union** across a user's roles in a cycle (E13) *(unverified)*
+- [x] Audit append-only — privileges revoked **and** a trigger; written in-transaction *(unverified)*
+- [ ] TOTP for Coordinator/Admin/Super Admin — **deferred to Phase 2** with staff auth; no staff
+      login exists yet, so there is nothing to second-factor
 
 **Behaviour**
-- [ ] ID generation via in-transaction counter (`R-020`) → `SPH-SP26-0042`
-- [ ] Token issuance: 128-bit entropy, `sha256` stored, raw never persisted (`R-022`)
-- [ ] Cycle state machine as a global gate checked by **every write endpoint**, not the UI
-- [ ] Registration through all three channels via **one code path**
-- [ ] Dedupe: exact email/phone/roll → hard block; trigram name ≥ 0.85 → soft warning
-- [ ] Override with mandatory ≥10-char reason, persisted and audited
-- [ ] Up to 3 ranked preferences · CV upload with MIME sniffing, 10 MB cap
-- [ ] Applicant status page — registered state
-- [ ] Confirmation email **mocked** to `notifications` table + preview route
+- [x] ID generation via in-transaction counter (`R-020`) → `SPH-SP26-0042` *(unverified)*
+- [x] Token issuance: 128-bit entropy, `sha256` stored, raw never persisted (`R-022`)
+- [x] Cycle state machine as a global gate inside the write function, not the UI *(unverified)*
+- [x] Registration through all three channels via **one code path** *(unverified)*
+- [x] Dedupe: exact email/phone/roll → hard block; trigram name ≥ 0.85 → soft warning *(unverified)*
+- [x] Override with mandatory ≥10-char reason, persisted and audited *(unverified)*
+- [x] Up to 3 ranked preferences · CV validation by magic number, 10 MB cap
+- [x] Applicant status page — pre-event states
+- [x] Confirmation email **mocked** to `notifications` table + `/dev/notifications` preview
+- [ ] CV upload endpoint and storage bucket — validation logic is written and tested, but
+      nothing is wired to object storage yet
 
-**Exit criteria**
+**Exit criteria** — none met until the suite runs
 - [ ] Online, walk-in digital, and paper transcription each produce structurally **identical**
       records with valid IDs and tokens — no second-class record
 - [ ] Dedupe override works end to end, with the reason in the audit log

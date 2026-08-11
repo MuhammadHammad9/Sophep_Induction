@@ -1,0 +1,69 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  /* Fira Sans / Fira Mono are self-hosted from /public/fonts in Phase 2. Until then the
+     stack falls back to system-ui, which is legible and avoids a render-blocking CDN
+     request on the applicant status page (NFR-PERF-006: LCP <= 2.5s on throttled 3G). */
+
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    @apply bg-background text-text font-sans text-body antialiased;
+  }
+
+  /* R-063 / NFR-A11Y-004: a visible focus indicator on every focusable element.
+     :focus-visible rather than :focus so mouse users do not see rings, but keyboard
+     users always do. */
+  :focus-visible {
+    @apply outline-none ring-[3px] ring-secondary ring-offset-2;
+  }
+
+  /* R-064 / NFR-A11Y-006: honour prefers-reduced-motion. This removes the pulse on live
+     states and all transitions — non-essential motion only. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+@layer components {
+  /* Applicant IDs, clock times and counts. Tabular figures stop digits jittering as
+     counters tick — SPH-SP26-0042 stays scannable across a noisy hall (spec 18.1). */
+  .id-text {
+    @apply font-mono;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* R-061 / NFR-A11Y-003: 44px minimum touch target. */
+  .touch-target {
+    @apply min-h-touch min-w-touch;
+  }
+
+  /* Offline indicator. Colour is never the sole signal (R-060) — the diagonal stripe
+     pattern carries the same meaning for anyone with a colour-vision deficiency. */
+  .stripe-offline {
+    background-image: repeating-linear-gradient(
+      45deg,
+      transparent,
+      transparent 8px,
+      rgb(180 83 9 / 0.12) 8px,
+      rgb(180 83 9 / 0.12) 16px
+    );
+  }
+}
+
+@layer utilities {
+  .sr-only-focusable:not(:focus):not(:focus-within) {
+    @apply sr-only;
+  }
+}
