@@ -1,0 +1,32 @@
+{
+  "name": "sophep-rms",
+  "version": "0.1.0",
+  "private": true,
+  "description": "SOPHEP Recruitment Management System — cycle-based induction platform",
+  "workspaces": [
+    "frontend",
+    "backend"
+  ],
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "dev": "npm run dev --workspace=@sophep/frontend",
+    "build": "npm run build --workspace=@sophep/frontend",
+    "start": "npm run start --workspace=@sophep/frontend",
+    "test": "npm run test --workspaces --if-present",
+    "test:rls": "npm run test:rls --workspace=@sophep/backend",
+    "test:concurrency": "npm run test:concurrency --workspace=@sophep/backend",
+    "test:e2e": "npm run test:e2e --workspace=@sophep/frontend",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "db:migrate": "npm run db:migrate --workspace=@sophep/backend",
+    "db:reset": "npm run db:reset --workspace=@sophep/backend",
+    "db:seed": "npm run db:seed --workspace=@sophep/backend",
+    "verify": "npm run typecheck && npm run lint && npm run test"
+  },
+  "devDependencies": {
+    "prettier": "^3.4.2",
+    "typescript": "^5.7.3"
+  }
+}

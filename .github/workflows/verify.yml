@@ -1,0 +1,56 @@
+name: verify
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+
+    # RLS and concurrency tests run against a real Postgres, not a mock. The whole point of
+    # rules.md R-014 is that the boundary is enforced by the database — testing it through a
+    # mock would verify nothing.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: sophep_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports: ['5432:5432']
+
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/sophep_test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Unit and integration tests
+        run: npm test
+
+      # Gates that run on EVERY build (spec: testing.strategy).
+      # These are not optional extras — each guards an invariant that is expensive to retrofit.
+      - name: RLS policy tests (direct SQL, bypassing the API)
+        run: npm run test:rls
+
+      - name: Concurrency tests (20 actors, zero duplicates)
+        run: npm run test:concurrency

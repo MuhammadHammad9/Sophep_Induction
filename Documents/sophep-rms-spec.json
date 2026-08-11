@@ -1,0 +1,4722 @@
+{
+  "meta": {
+    "artifact_id": "SOPHEP-RMS-SPEC-JSON",
+    "version": "2.0.0",
+    "generated": "2026-08-11",
+    "source_documents": [
+      "SOPHEP-RMS-ARCH-002 (Architecture & UX Specification v2.0)",
+      "SOPHEP-RMS-TRD-001 (Technical Requirements Document v1.0)",
+      "SOPHEP-RMS-FLOWS-v2 (Figma, 11 corrected boards)"
+    ],
+    "conformance": [
+      "ISO/IEC/IEEE 29148:2018",
+      "WCAG 2.1 AA",
+      "OWASP ASVS 4.0 L2"
+    ],
+    "purpose": "Single machine-readable source of truth for implementing the SOPHEP Recruitment Management System. Contains every decision, correction, constraint and requirement agreed during design.",
+    "status": "Draft - not baselined. See open_issues.",
+    "notes_for_implementers": [
+      "Anything marked corrects_v1_error replaces an earlier design that was WRONG. Do not implement the v1 form.",
+      "Requirements using 'shall' are mandatory. Absence is a defect.",
+      "Where this JSON and prose documents disagree, treat it as a defect in this JSON and raise it."
+    ]
+  },
+  "project": {
+    "name": "SOPHEP Recruitment Management System",
+    "short_name": "RMS",
+    "society_code": "SPH",
+    "problem": "Manage society induction end to end: application, check-in, queueing, interviewing, scoring, department allocation, offers.",
+    "scale_today": "100-200 applicants per cycle",
+    "scale_design_target": "1000 applicants per cycle without architectural change",
+    "cadence": "Two cycles per year (Spring, Fall), reused every semester",
+    "in_scope": [
+      "Registration via online, walk-in digital, walk-in paper transcription",
+      "Applicant identity, access tokens, QR codes",
+      "Event-day check-in including full offline operation",
+      "Queue management, panel assignment, no-show handling",
+      "Structured interview evaluation with bias correction",
+      "Capacity-constrained department allocation",
+      "Result publication, offers, waitlist cascade",
+      "Role-based access control and append-only audit",
+      "Multi-cycle historical records"
+    ],
+    "out_of_scope": [
+      {
+        "item": "Payment or fee collection",
+        "reason": "Induction is free"
+      },
+      {
+        "item": "Native mobile apps",
+        "reason": "PWA meets all needs at lower cost"
+      },
+      {
+        "item": "Post-onboarding member management",
+        "reason": "Separate system; RMS exports a roster"
+      },
+      {
+        "item": "Automated CV parsing or ML ranking",
+        "reason": "Fairness risk disproportionate to benefit at this scale"
+      },
+      {
+        "item": "Multi-society tenancy",
+        "reason": "Schema accommodates it; not implemented this release"
+      },
+      {
+        "item": "SMS / WhatsApp notifications",
+        "reason": "Deferred to Phase 6"
+      }
+    ]
+  },
+  "glossary": [
+    {
+      "term": "Cycle",
+      "definition": "One complete induction round, e.g. Spring 2027. Top-level container for all data."
+    },
+    {
+      "term": "Stage",
+      "definition": "A scheduled phase within a cycle: Registration, Interview Day 1, Review, Decisions."
+    },
+    {
+      "term": "Track",
+      "definition": "A queue lane. Usually one per department, or a single shared 'general' track."
+    },
+    {
+      "term": "Panel",
+      "definition": "A session: the set of interviewers occupying a room for a shift. The unit that PULLS from the queue."
+    },
+    {
+      "term": "Room",
+      "definition": "A physical location. Deliberately distinct from Panel."
+    },
+    {
+      "term": "Grace window",
+      "definition": "Period after an applicant is called before they are marked skipped. Default 5 minutes."
+    },
+    {
+      "term": "Parked",
+      "definition": "Removed from the active queue after repeated non-attendance; requires manual reactivation."
+    },
+    {
+      "term": "Shrinkage",
+      "definition": "Empirical-Bayes correction of interviewer strictness. w = n/(n+5)."
+    },
+    {
+      "term": "Dual control",
+      "definition": "An action requiring confirmation by two DISTINCT authenticated Super Admins."
+    },
+    {
+      "term": "Projection",
+      "definition": "A derived field written only by the owning transition function, in the same transaction."
+    },
+    {
+      "term": "Deferred acceptance",
+      "definition": "Gale-Shapley applicant-proposing stable matching used for department allocation."
+    }
+  ],
+  "design_principles": [
+    {
+      "rank": 1,
+      "principle": "The event never stops",
+      "detail": "Every critical path has a degraded mode. No single failure - network, server, device, person - may halt registration or interviewing."
+    },
+    {
+      "rank": 2,
+      "principle": "Never present a number you know is stale as if it were live",
+      "detail": "Honesty beats the appearance of stability. Promoted to a principle because v1 violated it (see errata E11)."
+    },
+    {
+      "rank": 3,
+      "principle": "Every state change is atomic, idempotent, and audited",
+      "detail": "Retrying must never produce a second effect. Every decision affecting a person traces to a human and a timestamp."
+    },
+    {
+      "rank": 4,
+      "principle": "One writer per fact",
+      "detail": "Every piece of state has exactly one owner. Projections are written in the same transaction as their source."
+    },
+    {
+      "rank": 5,
+      "principle": "Fairness is enforced by the schema, not by policy",
+      "detail": "Bias controls live in the database and permission model, not in asking people to behave."
+    },
+    {
+      "rank": 6,
+      "principle": "Applicants see only themselves",
+      "detail": "Enforced at row level in the database, never by UI alone."
+    },
+    {
+      "rank": 7,
+      "principle": "Optimise for the fifteen seconds at the desk",
+      "detail": "A volunteer under pressure completes check-in in one scan and zero decisions."
+    },
+    {
+      "rank": 8,
+      "principle": "Configuration over code",
+      "detail": "Departments, rubrics, criteria, stages, capacities and templates are data. A new cycle never requires a deployment."
+    },
+    {
+      "rank": 9,
+      "principle": "Cycles are immutable once closed",
+      "detail": "Historical data is a record, not a working document."
+    }
+  ],
+  "errata": {
+    "description": "Fifteen defects found in the v1 design during self-audit. Each entry describes what was wrong, why, and the correction. Implementers must build the corrected form.",
+    "items": [
+      {
+        "id": "E1",
+        "severity": "critical",
+        "category": "security",
+        "title": "Offline QR verification was cryptographically broken",
+        "v1_design": "QR carries an HMAC signature; check-in device verifies it offline using 'the cycle HMAC public verification parameters'.",
+        "why_wrong": "HMAC is symmetric. There is no HMAC public verification parameter. Verifying HMAC requires the signing secret itself, so v1 required shipping the cycle QR signing secret to every volunteer phone. Anyone extracting it could mint unlimited valid SOPHEP QR codes.",
+        "correction": "Primary offline verification is sha256(token) set-membership against the cached roster - no cryptography and no secret required. Ed25519 (asymmetric) signature added ONLY to cover applicants registered after the morning roster sync; devices hold the PUBLIC key only.",
+        "affects": [
+          "FR-IDT-007",
+          "FR-CHK-004",
+          "FR-CHK-005",
+          "FR-CHK-018",
+          "NFR-SEC-003"
+        ],
+        "flow": "v2-01"
+      },
+      {
+        "id": "E2",
+        "severity": "critical",
+        "category": "algorithm",
+        "title": "Normalisation scale and score thresholds contradicted each other",
+        "v1_design": "normalised = 50 + 10z, with minimum_score 55 and auto_shortlist_above 75.",
+        "why_wrong": "That mapping forces cohort mean 50, sd 10 by construction. So 75 is +2.5 sigma, roughly the top 0.6 percent - auto-shortlist would fire for about one person in 200. The 55-75 manual band would swallow around 30 percent of the cohort, about 60 people, in a meeting described as covering 29. Thresholds calibrated for a raw 0-100 scale were silently applied to a z-scale.",
+        "correction": "Map to the cohort distribution, not an arbitrary 50/10. Express selection thresholds relative to department capacity as ranks, not absolute scores.",
+        "affects": [
+          "FR-SCR-011",
+          "FR-SCR-012",
+          "FR-SCR-013"
+        ],
+        "flow": "v2-06"
+      },
+      {
+        "id": "E3",
+        "severity": "critical",
+        "category": "algorithm",
+        "title": "Averaging raw and normalised scores together is meaningless",
+        "v1_design": "Interviewers with fewer than 8 evaluations fall back to raw; then final = mean(normalised across all evaluations).",
+        "why_wrong": "Two different scales averaged together. Also creates a cliff: an interviewer's 8th evaluation retroactively rescales the previous seven, so identically-scored applicants rank differently based on how many OTHER people their interviewer saw.",
+        "correction": "Empirical-Bayes shrinkage. One formula always applied: w = n/(n+5), bias = interviewer_mean - cohort_mean, adjusted = raw - (w * bias). Continuous, never mixes scales, no mode switch. The sigma >= 3 guard from v1 is deleted as unnecessary.",
+        "affects": [
+          "FR-SCR-002",
+          "FR-SCR-003",
+          "FR-SCR-005",
+          "FR-SCR-006"
+        ],
+        "flow": "v2-06"
+      },
+      {
+        "id": "E4",
+        "severity": "high",
+        "category": "schema",
+        "title": "Unique index on email made the documented override path impossible",
+        "v1_design": "Prose allowed dedupe override with a reason; schema declared a plain UNIQUE index on (cycle_id, email_norm).",
+        "why_wrong": "The override INSERT would fail on constraint violation. Prose and schema directly contradicted; a documented flow branch was forbidden by the database.",
+        "correction": "Add dedupe_override_reason column. Partial unique index excludes rows where dedupe_override_reason IS NOT NULL. Accidents still caught; deliberate audited overrides work.",
+        "affects": [
+          "FR-REG-007",
+          "FR-REG-008",
+          "FR-REG-009",
+          "DR-005"
+        ],
+        "flow": "v2-02"
+      },
+      {
+        "id": "E5",
+        "severity": "high",
+        "category": "architecture",
+        "title": "Two sources of truth for applicant state",
+        "v1_design": "applicants.state and queue_entries.state both encoded queued/called/in_interview with nothing keeping them consistent.",
+        "why_wrong": "They would drift. First symptom: an applicant whose status page and panel screen disagree, during the event, in front of them. Unfixable after the fact because nothing records which was right.",
+        "correction": "Explicit state ownership. queue_entries.state is authoritative for event-day state; applicants.state is a projection written in the same transaction by the same function only.",
+        "affects": [
+          "FR-OPS-001",
+          "FR-OPS-002",
+          "FR-OPS-003"
+        ],
+        "flow": "v2-03"
+      },
+      {
+        "id": "E6",
+        "severity": "medium",
+        "category": "schema",
+        "title": "email_norm was a no-op that did not match its own description",
+        "v1_design": "email_norm citext GENERATED ALWAYS AS (lower(email)) STORED, on a column already typed citext.",
+        "why_wrong": "citext is already case-insensitive, so lower() did nothing. Prose promised Gmail dot and plus-tag stripping the column never implemented, so a.b+induction@gmail.com and ab@gmail.com were treated as different people when v1 explicitly said they would not be.",
+        "correction": "Real IMMUTABLE norm_email() and norm_phone() functions used by the generated columns.",
+        "affects": [
+          "FR-REG-004",
+          "FR-REG-005"
+        ],
+        "flow": "v2-02"
+      },
+      {
+        "id": "E7",
+        "severity": "high",
+        "category": "query",
+        "title": "NOT IN in the queue claim recusal filter",
+        "v1_design": "AND applicant_id NOT IN (SELECT applicant_id FROM recusals WHERE ...)",
+        "why_wrong": "NOT IN returns ZERO rows if the subquery yields a single NULL. On the floor this looks like the system silently stopped handing out applicants - a total queue stall with no error. Also the slower plan.",
+        "correction": "NOT EXISTS correlated subquery.",
+        "affects": [
+          "FR-QUE-006",
+          "FR-QUE-007"
+        ],
+        "flow": "v2-04"
+      },
+      {
+        "id": "E8",
+        "severity": "high",
+        "category": "algorithm",
+        "title": "Deferred acceptance was non-deterministic",
+        "v1_design": "Departments ranked applicants by score plus a recommendation bonus. Ordering stopped there.",
+        "why_wrong": "Scores tie frequently on a coarse rubric. Running allocation twice could produce two different valid stable matchings. In a dispute, 'the algorithm decided' is only a defence if the algorithm decides the SAME thing every time.",
+        "correction": "Total deterministic tie-break chain: adjusted score desc, recommendation count desc, panel spread asc, application time asc, applicant_id asc.",
+        "affects": [
+          "FR-DEC-006",
+          "FR-DEC-007"
+        ],
+        "flow": "v2-07"
+      },
+      {
+        "id": "E9",
+        "severity": "high",
+        "category": "security",
+        "title": "RLS depended on a session variable that never gets set under a pooler",
+        "v1_design": "Policies read current_setting('app.applicant_id', true); nothing said how it is written.",
+        "why_wrong": "Under transaction-mode connection pooling (Supabase default) a session-level SET either leaks across unrelated requests or vanishes. Either the security boundary fails open, or nothing works.",
+        "correction": "Derive from verified JWT claims, or set_config(..., true) inside the same transaction. Policies use nullif(...)::uuid so an unset context yields NULL and matches nothing - fails closed.",
+        "affects": [
+          "FR-RBAC-005",
+          "FR-RBAC-006"
+        ],
+        "flow": "v2-09"
+      },
+      {
+        "id": "E10",
+        "severity": "medium",
+        "category": "schema",
+        "title": "Panel state machine could not represent blocked",
+        "v1_design": "panels.status enum was closed | open | busy | break.",
+        "why_wrong": "The design described panels unable to call next until all evaluations were in, but there was no state for it. An unrepresentable state is one the UI has to guess at.",
+        "correction": "Add awaiting_evaluations to the enum.",
+        "affects": [
+          "FR-INT-002",
+          "FR-INT-013"
+        ],
+        "flow": "v2-04"
+      },
+      {
+        "id": "E11",
+        "severity": "high",
+        "category": "behaviour",
+        "title": "Wait-time clamp was designed to display a number known to be false",
+        "v1_design": "Never let the estimate increase while the applicant's queue position has not worsened.",
+        "why_wrong": "If two of four panels break, the true wait doubles with position unchanged. The rule would keep showing the old, now-wrong number - prioritising the appearance of stability over telling someone the truth about their afternoon.",
+        "correction": "Revise upward whenever active_panels or observed service time changes materially, and always state the cause.",
+        "affects": [
+          "FR-QUE-017"
+        ],
+        "flow": "v2-05"
+      },
+      {
+        "id": "E12",
+        "severity": "low",
+        "category": "documentation",
+        "title": "Overstated registration throughput",
+        "v1_design": "Claimed the per-cycle counter sustains thousands of registrations per second.",
+        "why_wrong": "The row lock serialises ALL registrations for a cycle. Honest figure is a few hundred per second, bounded by commit latency. The overstatement undercut the credibility of the 10,000-applicant scaling claim.",
+        "correction": "State honest numbers; document the sharded counter alternative in the scale path.",
+        "affects": [
+          "FR-IDT-004",
+          "NFR-SCAL-002"
+        ]
+      },
+      {
+        "id": "E13",
+        "severity": "medium",
+        "category": "access_control",
+        "title": "Permission gate assumed a single role per user",
+        "v1_design": "memberships PK permitted several roles per user per cycle, but the gate loaded one role.",
+        "why_wrong": "A Coordinator who also interviews - entirely normal - would be silently denied their second role's capabilities.",
+        "correction": "Effective capabilities are the UNION across all roles held in that cycle, computed once at session start. No deny rules.",
+        "affects": [
+          "FR-RBAC-003"
+        ],
+        "flow": "v2-09"
+      },
+      {
+        "id": "E14",
+        "severity": "medium",
+        "category": "data",
+        "title": "No timezone policy",
+        "v1_design": "All timestamptz, but every '10:00' in the spec was ambiguous.",
+        "why_wrong": "Stage boundaries, grace windows and display times would be implemented inconsistently across clients.",
+        "correction": "Store timestamptz. Each cycle carries an IANA timezone, default Asia/Karachi. All rendering derives from it. Never persist local wall-clock strings.",
+        "affects": [
+          "FR-CYC-013",
+          "DR-004"
+        ]
+      },
+      {
+        "id": "E15",
+        "severity": "medium",
+        "category": "process",
+        "title": "Undefined behaviour when a stage closes with interviews running",
+        "v1_design": "Not specified.",
+        "why_wrong": "Orphaned in_interview and awaiting_evaluations records; the classic failure of discovering eleven missing evaluations three days later when interviewers no longer remember the candidates.",
+        "correction": "Stage close is a hard gate: blocks on in_progress interviews, blocks on outstanding evaluations with a per-interviewer waiver action, warns on queued/called with bulk carry-forward or no-show, then auto-resolves parked to no_show.",
+        "affects": [
+          "FR-CYC-008",
+          "FR-CYC-009",
+          "FR-CYC-010",
+          "FR-CYC-011"
+        ],
+        "flow": "v2-08"
+      }
+    ]
+  },
+  "domain_model": {
+    "hierarchy": "Society > Cycle > {Stage, Department, Track, Room, Panel, Rubric, Applicant, Notification, AuditEvent}",
+    "entities": [
+      {
+        "name": "Society",
+        "purpose": "Top-level owner. Enables future multi-society tenancy.",
+        "scoped_by": null
+      },
+      {
+        "name": "Cycle",
+        "purpose": "One induction round. Container for everything.",
+        "scoped_by": "society"
+      },
+      {
+        "name": "Stage",
+        "purpose": "Scheduled phase; gates which operations are legal.",
+        "scoped_by": "cycle"
+      },
+      {
+        "name": "Department",
+        "purpose": "Destination with a capacity and interviewers.",
+        "scoped_by": "cycle"
+      },
+      {
+        "name": "Track",
+        "purpose": "Queue lane. Decouples queueing from department structure.",
+        "scoped_by": "cycle"
+      },
+      {
+        "name": "Room",
+        "purpose": "Physical place only.",
+        "scoped_by": "cycle"
+      },
+      {
+        "name": "Panel",
+        "purpose": "A SESSION of interviewers in a room. The unit that pulls from the queue.",
+        "scoped_by": "cycle"
+      },
+      {
+        "name": "Rubric",
+        "purpose": "Versioned criteria set with weights and anchors.",
+        "scoped_by": "cycle"
+      },
+      {
+        "name": "Applicant",
+        "purpose": "A person applying in this cycle.",
+        "scoped_by": "cycle"
+      },
+      {
+        "name": "AccessToken",
+        "purpose": "Bearer credential for QR and status page. Stored hashed.",
+        "scoped_by": "applicant"
+      },
+      {
+        "name": "CheckIn",
+        "purpose": "Owner of the checked-in fact. One per applicant per stage.",
+        "scoped_by": "stage"
+      },
+      {
+        "name": "QueueEntry",
+        "purpose": "AUTHORITATIVE event-day state.",
+        "scoped_by": "cycle"
+      },
+      {
+        "name": "Interview",
+        "purpose": "One panel session with one applicant.",
+        "scoped_by": "cycle"
+      },
+      {
+        "name": "Evaluation",
+        "purpose": "One interviewer's scoring of one interview. Immutable on submit.",
+        "scoped_by": "interview"
+      },
+      {
+        "name": "Decision",
+        "purpose": "Versioned outcome.",
+        "scoped_by": "cycle"
+      },
+      {
+        "name": "Offer",
+        "purpose": "Time-boxed offer with accept/decline/expire.",
+        "scoped_by": "decision"
+      },
+      {
+        "name": "AuditEvent",
+        "purpose": "Append-only record of every state change.",
+        "scoped_by": "cycle"
+      }
+    ],
+    "critical_distinction": {
+      "rule": "Room != Panel != Interviewer",
+      "reason": "Interviewers rotate, take breaks and swap rooms. Without a Panel entity every rotation corrupts throughput statistics and the audit trail."
+    },
+    "why_track_exists": "A single queue routes a Logistics applicant to a Design panel that cannot evaluate them, while Logistics interviewers sit idle. Recommended default for SOPHEP scale: one 'general' track for round 1; per-department tracks only if a second round is introduced. Schema supports both from day one."
+  },
+  "state_ownership": {
+    "rule": "Every fact has exactly one owning table. applicants.state is NEVER written directly by application code.",
+    "corrects_v1_error": "E5",
+    "owners": [
+      {
+        "fact": "Queue position, called/skipped/parked",
+        "owner_table": "queue_entries.state",
+        "projection": "applicants.state",
+        "written_only_by": "fn_queue_transition()"
+      },
+      {
+        "fact": "Checked in for a stage",
+        "owner_table": "check_ins row exists",
+        "projection": "applicants.state",
+        "written_only_by": "fn_check_in()"
+      },
+      {
+        "fact": "Interview progress",
+        "owner_table": "interviews.status",
+        "projection": "applicants.state",
+        "written_only_by": "fn_interview_transition()"
+      },
+      {
+        "fact": "Final outcome",
+        "owner_table": "decisions (latest version)",
+        "projection": "applicants.state",
+        "written_only_by": "fn_apply_decision()"
+      },
+      {
+        "fact": "Published record",
+        "owner_table": "result_snapshots.payload",
+        "projection": null,
+        "written_only_by": "write-once, immutable"
+      }
+    ],
+    "invariants": [
+      "Every transition function writes an audit_events row in the SAME transaction. No audit, no commit.",
+      "A nightly job re-derives applicants.state from owners and alerts on any mismatch. Drift is monitored, not mysterious."
+    ]
+  },
+  "state_machines": {
+    "applicant": {
+      "authoritative_source": "queue_entries.state for event-day states",
+      "states": [
+        "draft",
+        "submitted",
+        "eligible",
+        "screened_out",
+        "checked_in",
+        "queued",
+        "called",
+        "in_interview",
+        "skipped",
+        "parked",
+        "interview_complete",
+        "under_review",
+        "selected",
+        "waitlisted",
+        "rejected",
+        "offer_pending",
+        "accepted",
+        "declined",
+        "lapsed",
+        "onboarded",
+        "withdrawn",
+        "no_show"
+      ],
+      "terminal_states": [
+        "screened_out",
+        "withdrawn",
+        "no_show",
+        "rejected",
+        "declined",
+        "lapsed",
+        "onboarded"
+      ],
+      "transitions": [
+        {
+          "from": "draft",
+          "to": "submitted",
+          "trigger": "form submitted",
+          "guard": "required fields complete",
+          "actor": "applicant"
+        },
+        {
+          "from": "submitted",
+          "to": "eligible",
+          "trigger": "screening passed",
+          "guard": "registration window open",
+          "actor": "system|admin"
+        },
+        {
+          "from": "submitted",
+          "to": "screened_out",
+          "trigger": "fails eligibility",
+          "guard": null,
+          "actor": "admin"
+        },
+        {
+          "from": "eligible",
+          "to": "checked_in",
+          "trigger": "QR scan or manual search",
+          "guard": "interview stage active AND token valid AND not already checked in for this stage",
+          "actor": "volunteer|coordinator"
+        },
+        {
+          "from": "checked_in",
+          "to": "queued",
+          "trigger": "enqueue on track",
+          "guard": "track resolved",
+          "actor": "system"
+        },
+        {
+          "from": "queued",
+          "to": "called",
+          "trigger": "panel claim",
+          "guard": "panel open AND panel serves track AND no recusal",
+          "actor": "panel"
+        },
+        {
+          "from": "called",
+          "to": "called",
+          "trigger": "on my way",
+          "guard": "grace_extended = false",
+          "actor": "applicant",
+          "effect": "grace +2 minutes, once only"
+        },
+        {
+          "from": "called",
+          "to": "in_interview",
+          "trigger": "panel presses Start",
+          "guard": "within grace window",
+          "actor": "panel"
+        },
+        {
+          "from": "called",
+          "to": "skipped",
+          "trigger": "grace expired",
+          "guard": null,
+          "actor": "system"
+        },
+        {
+          "from": "skipped",
+          "to": "queued",
+          "trigger": "first skip requeue",
+          "guard": "call_count = 1",
+          "actor": "system",
+          "effect": "priority 30, enqueued_at = now - 10 min"
+        },
+        {
+          "from": "skipped",
+          "to": "parked",
+          "trigger": "second skip",
+          "guard": "call_count >= 2",
+          "actor": "system"
+        },
+        {
+          "from": "parked",
+          "to": "queued",
+          "trigger": "volunteer reactivates",
+          "guard": null,
+          "actor": "volunteer",
+          "effect": "priority 30"
+        },
+        {
+          "from": "parked",
+          "to": "no_show",
+          "trigger": "stage close",
+          "guard": null,
+          "actor": "system"
+        },
+        {
+          "from": "in_interview",
+          "to": "queued",
+          "trigger": "interview voided",
+          "guard": "coordinator authority",
+          "actor": "coordinator",
+          "effect": "priority 100"
+        },
+        {
+          "from": "in_interview",
+          "to": "interview_complete",
+          "trigger": "all evaluations submitted OR coordinator waiver",
+          "guard": "every panel member submitted or waived",
+          "actor": "system"
+        },
+        {
+          "from": "interview_complete",
+          "to": "queued",
+          "trigger": "another round required",
+          "guard": "rounds remaining",
+          "actor": "system"
+        },
+        {
+          "from": "interview_complete",
+          "to": "under_review",
+          "trigger": "all rounds complete",
+          "guard": null,
+          "actor": "system"
+        },
+        {
+          "from": "under_review",
+          "to": "selected",
+          "trigger": "allocation matched",
+          "guard": "results locked by two distinct super admins",
+          "actor": "system"
+        },
+        {
+          "from": "under_review",
+          "to": "waitlisted",
+          "trigger": "above line, no capacity",
+          "guard": "same",
+          "actor": "system"
+        },
+        {
+          "from": "under_review",
+          "to": "rejected",
+          "trigger": "below line or criterion floor",
+          "guard": "same",
+          "actor": "system"
+        },
+        {
+          "from": "selected",
+          "to": "offer_pending",
+          "trigger": "publication",
+          "guard": "dry run passed",
+          "actor": "super_admin"
+        },
+        {
+          "from": "waitlisted",
+          "to": "offer_pending",
+          "trigger": "cascade promotion",
+          "guard": "still eligible and not placed elsewhere",
+          "actor": "system"
+        },
+        {
+          "from": "offer_pending",
+          "to": "accepted",
+          "trigger": "applicant accepts",
+          "guard": "before expiry",
+          "actor": "applicant"
+        },
+        {
+          "from": "offer_pending",
+          "to": "declined",
+          "trigger": "applicant declines",
+          "guard": null,
+          "actor": "applicant",
+          "effect": "cascade"
+        },
+        {
+          "from": "offer_pending",
+          "to": "lapsed",
+          "trigger": "deadline passes",
+          "guard": "expiry reached",
+          "actor": "system",
+          "effect": "cascade"
+        },
+        {
+          "from": "accepted",
+          "to": "onboarded",
+          "trigger": "added to roster",
+          "guard": null,
+          "actor": "admin"
+        },
+        {
+          "from": "accepted",
+          "to": "declined",
+          "trigger": "late withdrawal",
+          "guard": null,
+          "actor": "applicant|admin",
+          "effect": "seat released, cascade"
+        },
+        {
+          "from": "eligible",
+          "to": "withdrawn",
+          "trigger": "self or staff withdrawal",
+          "guard": null,
+          "actor": "applicant|staff"
+        },
+        {
+          "from": "queued",
+          "to": "withdrawn",
+          "trigger": "leaves the venue",
+          "guard": null,
+          "actor": "applicant|staff",
+          "effect": "DELETE queue entry in same transaction"
+        }
+      ],
+      "rejection_behaviour": "Any transition not listed returns HTTP 409 INVALID_TRANSITION with current_state and attempted in the detail object."
+    },
+    "interview": {
+      "states": [
+        "in_progress",
+        "awaiting_evaluations",
+        "complete",
+        "abandoned",
+        "flagged",
+        "void"
+      ],
+      "transitions": [
+        {
+          "from": "in_progress",
+          "to": "awaiting_evaluations",
+          "trigger": "first evaluation submitted"
+        },
+        {
+          "from": "awaiting_evaluations",
+          "to": "complete",
+          "trigger": "all evaluations submitted or waived"
+        },
+        {
+          "from": "in_progress",
+          "to": "abandoned",
+          "trigger": "panel abandons with reason"
+        },
+        {
+          "from": "in_progress",
+          "to": "flagged",
+          "trigger": "no panel heartbeat for 90 minutes"
+        },
+        {
+          "from": "awaiting_evaluations",
+          "to": "flagged",
+          "trigger": "no panel heartbeat for 90 minutes"
+        },
+        {
+          "from": "flagged",
+          "to": "void",
+          "trigger": "coordinator voids",
+          "effect": "applicant requeued at priority 100"
+        },
+        {
+          "from": "flagged",
+          "to": "complete",
+          "trigger": "coordinator force-completes with reason"
+        },
+        {
+          "from": "flagged",
+          "to": "in_progress",
+          "trigger": "panel resumes on a replacement device"
+        }
+      ]
+    },
+    "panel": {
+      "states": [
+        "closed",
+        "open",
+        "busy",
+        "awaiting_evaluations",
+        "break"
+      ],
+      "corrects_v1_error": "E10",
+      "notes": "awaiting_evaluations blocks the Call Next action. The UI must state WHICH interviewer is outstanding - a disabled control without explanation is a defect (FR-INT-013)."
+    },
+    "cycle": {
+      "states": [
+        "draft",
+        "registration_open",
+        "registration_closed",
+        "interviews_active",
+        "interviews_closed",
+        "under_review",
+        "results_locked",
+        "published",
+        "archived"
+      ],
+      "role": "Global gate checked by EVERY write endpoint, not the UI.",
+      "transitions": [
+        {
+          "from": "draft",
+          "to": "registration_open",
+          "guard": "departments, rubric and stages configured"
+        },
+        {
+          "from": "registration_open",
+          "to": "registration_closed",
+          "guard": "window ends or manual close"
+        },
+        {
+          "from": "registration_open",
+          "to": "interviews_active",
+          "guard": "late walk-in desk kept open"
+        },
+        {
+          "from": "registration_closed",
+          "to": "interviews_active",
+          "guard": "coordinator opens interview stage"
+        },
+        {
+          "from": "interviews_active",
+          "to": "interviews_closed",
+          "guard": "stage close gate passed - see stage_close_gate"
+        },
+        {
+          "from": "interviews_closed",
+          "to": "under_review",
+          "guard": "shrinkage adjustment computed"
+        },
+        {
+          "from": "under_review",
+          "to": "results_locked",
+          "guard": "President locks AND General Secretary confirms, distinct users"
+        },
+        {
+          "from": "results_locked",
+          "to": "under_review",
+          "guard": "unlock requires dual control plus reason"
+        },
+        {
+          "from": "results_locked",
+          "to": "published",
+          "guard": "dry run passed"
+        },
+        {
+          "from": "published",
+          "to": "archived",
+          "guard": "all offers resolved"
+        }
+      ],
+      "archived_behaviour": "Read-only at the DATABASE level. No hard-delete endpoint exists for any child record."
+    },
+    "offer": {
+      "states": [
+        "pending",
+        "accepted",
+        "declined",
+        "lapsed",
+        "withdrawn"
+      ],
+      "expiry_default_days": 5,
+      "reminder_hours_before_expiry": 48
+    }
+  },
+  "stage_close_gate": {
+    "corrects_v1_error": "E15",
+    "flow": "v2-08",
+    "rationale": "Blocking is deliberate. The alternative is discovering eleven missing evaluations three days later, when interviewers no longer remember the candidates.",
+    "checks_in_order": [
+      {
+        "check": "Any interview in_progress",
+        "action": "BLOCK",
+        "response": "List blocking interviews by room and panel"
+      },
+      {
+        "check": "Any interview awaiting_evaluations",
+        "action": "BLOCK",
+        "response": "List outstanding evaluations grouped by interviewer, with a per-row waive action"
+      },
+      {
+        "check": "Interviewer unreachable",
+        "action": "ALLOW WAIVER",
+        "response": "Coordinator waives that specific evaluation with a written reason; audited; interview completes on remaining evaluations"
+      },
+      {
+        "check": "Applicants still queued or called",
+        "action": "WARN",
+        "response": "List them; offer bulk carry-forward to next interview stage or bulk no-show"
+      },
+      {
+        "check": "All clear",
+        "action": "PROCEED",
+        "response": "Parked applicants auto-resolve to no_show; write audit event; close stage"
+      }
+    ]
+  },
+  "identity": {
+    "applicant_id": {
+      "format": "SSS-XXNN-NNNN",
+      "example": "SPH-SP26-0042",
+      "parts": [
+        {
+          "part": "SSS",
+          "meaning": "Society code, 3 letters",
+          "example": "SPH"
+        },
+        {
+          "part": "XX",
+          "meaning": "Season: SP Spring, FA Fall, SU Summer",
+          "example": "SP"
+        },
+        {
+          "part": "NN",
+          "meaning": "Two-digit year",
+          "example": "26"
+        },
+        {
+          "part": "NNNN",
+          "meaning": "Per-cycle sequence, zero-padded from 0001",
+          "example": "0042"
+        }
+      ],
+      "why_not_user_original": "The user's original SP26-0001 used SP for SOPHEP, so Spring 2026 and Fall 2026 produced identical prefixes. Two cycles in one year collided semantically and staff could not tell cycles apart by eye.",
+      "properties": [
+        "Speakable across a noisy hall",
+        "Sortable",
+        "Unique within cycle",
+        "Never reused across cycles"
+      ],
+      "generation_sql": [
+        "-- Inside the SAME transaction as the applicant INSERT",
+        "UPDATE cycles SET applicant_seq = applicant_seq + 1",
+        " WHERE id = $1 RETURNING applicant_seq;"
+      ],
+      "forbidden_pattern": "SELECT MAX(sequence) + 1 -- produces duplicate IDs the first time two desks register simultaneously. Reject at code review (FR-IDT-003).",
+      "honest_throughput": "A few hundred registrations per second, bounded by commit latency. Roughly 100x realistic peak. v1 claimed thousands - see errata E12."
+    },
+    "token": {
+      "corrects_v1_error": "E1",
+      "entropy_bits": 128,
+      "encoding": "base64url, 16 random bytes",
+      "storage": "sha256(token) ONLY. Raw token never persisted in any database, log or backup.",
+      "signature_algorithm": "Ed25519",
+      "signature_rationale": "Asymmetric. Devices hold the PUBLIC key and can verify without being able to sign. HMAC could never do this - that was the v1 flaw.",
+      "qr_payload_format": "https://apply.sophep.org/q/<token>.<signature>",
+      "qr_payload_rationale": "A full HTTPS URL means any phone camera opens the status page as a fallback. The custom scanner is an optimisation, not a dependency.",
+      "verification_layers": [
+        {
+          "layer": 1,
+          "name": "Format",
+          "runs": "device, offline",
+          "requires": "nothing",
+          "catches": "Garbage and other apps' QR codes"
+        },
+        {
+          "layer": 2,
+          "name": "Roster hash",
+          "runs": "device, offline",
+          "requires": "cached roster",
+          "catches": "Everyone registered before sync - the 99 percent case",
+          "method": "sha256(scanned token) set-membership test"
+        },
+        {
+          "layer": 3,
+          "name": "Ed25519",
+          "runs": "device, offline",
+          "requires": "PUBLIC key only",
+          "catches": "Applicants registered after the morning roster sync"
+        },
+        {
+          "layer": 4,
+          "name": "Server",
+          "runs": "online",
+          "requires": "database",
+          "catches": "Revocation, wrong cycle, wrong state, already used"
+        }
+      ],
+      "rules": [
+        "Exactly one active token per applicant; rotation revokes the previous immediately and atomically",
+        "Lookups rate-limited to 10 per minute per source IP",
+        "Constant-time hash comparison",
+        "Cycle keypair rotated per cycle, so a prior cycle's QR fails verification",
+        "Tokens expire 60 days after final decisions"
+      ]
+    }
+  },
+  "registration": {
+    "flow": "v2-02",
+    "pipeline": [
+      "validate",
+      "normalise",
+      "dedupe",
+      "allocate ID",
+      "persist",
+      "notify"
+    ],
+    "channels": [
+      {
+        "channel": "online",
+        "id": true,
+        "token": true,
+        "qr_delivery": "Email plus status page",
+        "checkin_method": "Scan phone screen"
+      },
+      {
+        "channel": "walkin_digital",
+        "id": true,
+        "token": true,
+        "qr_delivery": "On-screen plus printed slip",
+        "checkin_method": "Scan slip or manual search"
+      },
+      {
+        "channel": "walkin_paper",
+        "id": true,
+        "token": true,
+        "qr_delivery": "Printed slip when transcribed",
+        "checkin_method": "Scan slip or manual search"
+      }
+    ],
+    "unification_rule": "Paper is an INPUT METHOD, not a separate pipeline. One code path, one set of edge cases, one thing for a volunteer to learn under pressure. The volunteer transcribes into the same entry screen; the paper original is filed with the applicant ID written top-right.",
+    "why_changed_from_user_design": "User's original gave QR only to online applicants, creating two divergent check-in paths and a second-class experience for walk-ins.",
+    "deduplication": {
+      "corrects_v1_error": "E4, E6",
+      "signals": [
+        {
+          "signal": "email",
+          "normalisation": "lowercase, trim; for gmail.com and googlemail.com only, strip dots and plus-suffixes from local part",
+          "match": "exact",
+          "action": "hard_block"
+        },
+        {
+          "signal": "phone",
+          "normalisation": "final 9 digits after removing all non-numeric characters",
+          "match": "exact",
+          "action": "hard_block"
+        },
+        {
+          "signal": "roll_number",
+          "normalisation": "case-insensitive",
+          "match": "exact",
+          "action": "hard_block"
+        },
+        {
+          "signal": "name",
+          "normalisation": "trigram similarity",
+          "match": ">= 0.85 AND shared department preference",
+          "action": "soft_warning"
+        }
+      ],
+      "hard_block_resolutions": [
+        {
+          "action": "Same person - check them in",
+          "effect": "Jump to check-in for the existing record"
+        },
+        {
+          "action": "Different person - override",
+          "effect": "Set dedupe_override_reason (min 10 chars), write audit event, proceed",
+          "requires": "written reason"
+        }
+      ],
+      "soft_warning_behaviour": "Dismissible in one tap. Never blocks."
+    },
+    "slot_booking": {
+      "status": "recommended, not assumed",
+      "window_minutes": 60,
+      "capacity_source": "derived from the throughput model",
+      "rationale": "The classic induction failure is 200 people arriving at 10:00 for a process serving 20 per hour; the last person waits eight hours and half leave. Slot booking turns arrivals from Poisson into schedulable, which is the difference between an orderly hall and a corridor full of resentful students. It also makes wait estimates dramatically more accurate.",
+      "walkin_behaviour": "Walk-ins fill unbooked capacity"
+    },
+    "cv_upload": {
+      "allowed_extensions": [
+        "pdf",
+        "docx",
+        "png",
+        "jpg"
+      ],
+      "max_size_mb": 10,
+      "content_type_check": "by inspection, not extension",
+      "virus_scan": "required before acceptance",
+      "serving": "signed URLs, 15 minute max TTL, generated per request, each generation audited, Content-Disposition attachment"
+    }
+  },
+  "check_in": {
+    "flow": "v2-01",
+    "target": "Under 8 seconds end to end, ZERO taps on the success path",
+    "camera_behaviour": "Continuously active. NOT a press-to-scan button.",
+    "success_behaviour": "Auto-dismiss after 2.5 seconds. No confirmation tap - across 200 scans that is 200 chances to double-tap and 200 wasted seconds.",
+    "failure_behaviour": "Requires explicit dismissal. A failure that scrolls past unnoticed becomes a person nobody checked in.",
+    "branches": [
+      {
+        "situation": "Success",
+        "colour": "emerald",
+        "content": "ID (mono 28px), name, track, position",
+        "dwell": "2.5s auto",
+        "volunteer_action": "none"
+      },
+      {
+        "situation": "Already checked in",
+        "colour": "AMBER not red",
+        "content": "Checked in 10:14, position 12",
+        "dwell": "2.5s auto",
+        "volunteer_action": "reassure and move on",
+        "rationale": "It is the most common non-happy path, it is NOT an error, and a red screen in front of a nervous applicant reads as 'you have a problem' when the correct message is 'you are fine'."
+      },
+      {
+        "situation": "Fails roster hash and signature",
+        "colour": "red",
+        "content": "Not a valid SOPHEP code",
+        "dwell": "requires dismissal",
+        "volunteer_action": "manual search"
+      },
+      {
+        "situation": "Token from a previous cycle",
+        "colour": "red",
+        "content": "This code is from Fall 2026",
+        "dwell": "requires dismissal",
+        "volunteer_action": "register as new"
+      },
+      {
+        "situation": "Withdrawn or screened out",
+        "colour": "red",
+        "content": "Not eligible - see Coordinator",
+        "dwell": "requires dismissal",
+        "volunteer_action": "escalate"
+      },
+      {
+        "situation": "Stage not open",
+        "colour": "amber",
+        "content": "Check-in opens at 10:00",
+        "dwell": "requires dismissal",
+        "volunteer_action": "wait or Coordinator override"
+      },
+      {
+        "situation": "No record at all",
+        "colour": "blue",
+        "content": "Register and check in",
+        "dwell": "requires dismissal",
+        "volunteer_action": "combined flow, under 30 seconds, flags needs_completion"
+      },
+      {
+        "situation": "No camera or broken screen",
+        "colour": null,
+        "content": "Manual search",
+        "dwell": null,
+        "volunteer_action": "search by any 4 digits of ID, last 4 of phone, or partial name"
+      },
+      {
+        "situation": "Offline",
+        "colour": "amber with diagonal stripes",
+        "content": "Offline - 3 pending sync",
+        "dwell": "persistent banner",
+        "volunteer_action": "continue normally"
+      },
+      {
+        "situation": "Track has no open panel",
+        "colour": "amber",
+        "content": "Checked in, wait time unavailable",
+        "dwell": "2.5s auto",
+        "volunteer_action": "none",
+        "system_action": "enqueue, SUPPRESS ETA, raise ops alert"
+      }
+    ],
+    "offline": {
+      "corrects_v1_error": "E1",
+      "roster_bundle": {
+        "contents": [
+          "applicant id",
+          "display_id",
+          "name",
+          "sha256(token)",
+          "department preferences",
+          "cycle Ed25519 PUBLIC key",
+          "stage configuration"
+        ],
+        "must_not_contain": [
+          "evaluations",
+          "scores",
+          "decisions",
+          "any private key material"
+        ],
+        "size_target_kb": 100,
+        "typical_size": "approx 40 KB for 200 applicants"
+      },
+      "duration_hours": 8,
+      "buffer_capacity": 500,
+      "local_storage": "IndexedDB, client-generated UUID plus device timestamp",
+      "indicator": "Persistent amber banner WITH diagonal stripe pattern - colour is never the only signal",
+      "manual_search": "works against the cached roster",
+      "position_display": "explicitly labelled approximate",
+      "reconnect": {
+        "order": "client timestamp ascending",
+        "mechanism": "each operation carries its original Idempotency-Key; server deduplicates via idempotency_keys table",
+        "conflict_resolution": "earliest server-received timestamp wins; conflict is LOGGED, never silently discarded",
+        "success_criterion": "100 percent reconciliation, zero duplicate records",
+        "banner_clears": "only at zero pending"
+      },
+      "hard_fallback": {
+        "artefact": "Printed roster sorted by ID and by surname, with tick boxes",
+        "recovery": "Coordinator bulk-reconcile screen accepting a list of identifiers",
+        "policy": "Print every morning. You will probably never use it, and the one time you do it will save the event."
+      }
+    },
+    "timestamp_authority": "Server timestamps are authoritative for ALL business logic. Client timestamps are persisted separately and used only for replay ordering."
+  },
+  "queue_engine": {
+    "flow": "v2-04",
+    "model": "PULL, not push",
+    "why_not_push": "Push assignment goes stale the moment one interview overruns. The system tells applicant 33 'Room 2' while Room 2 is 20 minutes behind and Room 4 sits empty. The display and the volunteer's manual reassignment then disagree.",
+    "claim_sql": [
+      "BEGIN;",
+      "",
+      "WITH claimed AS (",
+      "  SELECT q.id",
+      "    FROM queue_entries q",
+      "   WHERE q.cycle_id = $cycle",
+      "     AND q.track_id = ANY($panel_tracks)",
+      "     AND q.state    = 'waiting'",
+      "     AND NOT EXISTS (            -- was NOT IN: NULL-unsafe, could stall the queue (E7)",
+      "           SELECT 1 FROM recusals r",
+      "            WHERE r.applicant_id   = q.applicant_id",
+      "              AND r.interviewer_id = ANY($panel_members)",
+      "         )",
+      "   ORDER BY q.priority DESC, q.enqueued_at ASC",
+      "   FOR UPDATE SKIP LOCKED",
+      "   LIMIT 1",
+      ")",
+      "UPDATE queue_entries q",
+      "   SET state = 'called', panel_id = $panel,",
+      "       called_at = now(), call_count = call_count + 1",
+      "  FROM claimed",
+      " WHERE q.id = claimed.id",
+      "RETURNING q.*;",
+      "",
+      "COMMIT;"
+    ],
+    "atomicity_guarantee": "FOR UPDATE SKIP LOCKED. Ten panels can press Call Next in the same millisecond and each receives a DIFFERENT applicant - no application-level locking, no retries, no possibility of double assignment. Zero rows returned means the queue is genuinely empty.",
+    "priority_tiers": [
+      {
+        "value": 100,
+        "label": "Accessibility or medical need",
+        "set_by": "Coordinator with reason"
+      },
+      {
+        "value": 100,
+        "label": "Interview voided through no fault of theirs",
+        "set_by": "system"
+      },
+      {
+        "value": 50,
+        "label": "Time-slot holder arrived in window",
+        "set_by": "system"
+      },
+      {
+        "value": 30,
+        "label": "Returning after a skip",
+        "set_by": "system"
+      },
+      {
+        "value": 10,
+        "label": "Standard",
+        "set_by": "system"
+      },
+      {
+        "value": 5,
+        "label": "Late for a booked slot",
+        "set_by": "system"
+      }
+    ],
+    "priority_philosophy": "Priority is DATA, not code. Coordinators can adjust any entry with a mandatory reason, visible in the audit log. Floor managers WILL need to bump someone; a system that forbids it is a system they stop using.",
+    "no_show_handling": {
+      "flow": "v2-04",
+      "grace_window_minutes": 5,
+      "grace_extension": {
+        "minutes": 2,
+        "limit": "once per call",
+        "trigger": "applicant taps 'I'm on my way' on their status page",
+        "rationale": "A 5-minute hard timer skips people who are 30 seconds away. Each avoided skip is an argument that never happens at the desk."
+      },
+      "first_skip": {
+        "new_state": "queued",
+        "priority": 30,
+        "enqueued_at": "now() minus 10 minutes",
+        "rationale": "A SOFT penalty. Sending someone from position 3 to position 40 over a two-minute absence provokes an argument at the desk that costs more time than the delay did."
+      },
+      "second_skip": {
+        "new_state": "parked",
+        "effect": "removed from panel-visible queues, added to volunteer worklist"
+      },
+      "parked_resolution": {
+        "reactivate": "any Volunteer, returns at priority 30",
+        "auto": "no_show at stage close"
+      },
+      "empty_queue_with_parked": {
+        "behaviour": "Panel interface shows the parked count; volunteers alerted to locate them",
+        "rationale": "Otherwise panels idle while people sit fifteen metres away."
+      },
+      "panel_idle_time_after_skip": "zero seconds - the skip and the next claim are the same transaction boundary"
+    },
+    "wait_estimation": {
+      "flow": "v2-05",
+      "corrects_v1_error": "E11",
+      "formula": {
+        "service_ewma": "0.3 * last_observed_duration + 0.7 * previous_ewma",
+        "seed_minutes": 12,
+        "active_panels": "panels with status open or busy on that track",
+        "eta": "ceil(position / max(active_panels,1)) * service_ewma + remaining time on the in-flight interview"
+      },
+      "display_rules": [
+        {
+          "rule": "Always a RANGE, never a single number",
+          "rationale": "A single number is read as a promise, and every broken promise costs trust",
+          "example": "About 15-25 minutes"
+        },
+        {
+          "rule": "Revise UPWARD when the truth changes and state the cause",
+          "causes": [
+            "queue position worsened",
+            "active_panels dropped",
+            "service time rose materially"
+          ],
+          "example": "Two panels are on break - about 15 minutes longer",
+          "rationale": "v1 suppressed upward revision and would have displayed a number it knew was wrong"
+        },
+        {
+          "rule": "Suppress entirely for the first 15 minutes of a stage",
+          "rationale": "The EWMA has no data; 'We will call you shortly' is more honest and more useful"
+        },
+        {
+          "rule": "Suppress whenever the track has no open panel",
+          "rationale": "Otherwise the applicant waits on a fictional estimate"
+        },
+        {
+          "rule": "Below position 3, stop estimating",
+          "replacement": "You're next / Almost your turn - stay nearby",
+          "rationale": "Precision there is impossible and unnecessary"
+        }
+      ],
+      "connection_loss_behaviour": "Keep the last known number visible with an explicit timestamp. NEVER a bare spinner - blanking the screen on someone in position 3 is cruel."
+    }
+  },
+  "interview": {
+    "interviewer_visible": [
+      "Applicant profile",
+      "Application answers",
+      "Ranked department preferences",
+      "CV or portfolio",
+      "Rubric with anchor descriptions inline",
+      "Free-text remarks",
+      "Recommend alternative department",
+      "Elapsed timer against target"
+    ],
+    "interviewer_must_not_see": [
+      "Any other interviewer's scores or remarks, including from a previous round",
+      "Any aggregate, average, rank or percentile",
+      "Any decision or shortlist status",
+      "Total number of applicants",
+      "Number of available places"
+    ],
+    "concealment_enforcement": "Row-level database policy, NOT the user interface alone.",
+    "rubric": {
+      "versioned": true,
+      "scope": "per cycle, optionally overridden per department",
+      "weight_constraint": "must sum to exactly 100, enforced by database constraint",
+      "anchors": {
+        "required": true,
+        "minimum": "at least min and max scale values",
+        "rationale": "An unanchored 1-5 scale means five different things to five interviewers, and no statistical normalisation fully recovers from that. Written anchors are the cheapest fairness intervention available."
+      },
+      "version_pinning": {
+        "when": "interview START, not submission",
+        "rationale": "Otherwise an edit mid-session splits one panel across two scales",
+        "corrects_v1_error": "E10 related, documented in ARCH v2 section 9.2"
+      },
+      "example_criteria": [
+        {
+          "code": "communication",
+          "label": "Communication",
+          "weight": 25,
+          "scale": "1-5",
+          "anchor_1": "Struggled to convey ideas",
+          "anchor_5": "Clear, structured, engaging"
+        },
+        {
+          "code": "motivation",
+          "label": "Motivation and fit",
+          "weight": 25,
+          "scale": "1-5"
+        },
+        {
+          "code": "skill",
+          "label": "Relevant skill",
+          "weight": 30,
+          "scale": "1-5"
+        },
+        {
+          "code": "teamwork",
+          "label": "Teamwork and attitude",
+          "weight": 20,
+          "scale": "1-5"
+        }
+      ]
+    },
+    "submission": {
+      "uniqueness": "One evaluation per (interview, interviewer), database-enforced",
+      "immutability": "Immutable on submit",
+      "revision_window_minutes": 15,
+      "revision_behaviour": "Creates a NEW revision with mandatory reason; original retained; audit log holds both",
+      "after_window": "Super Admin unlock only, itself audited",
+      "completion_gate": "Interview completes only when EVERY panel member has submitted, or a Coordinator waives a specific outstanding evaluation",
+      "blocking_effect": "Panel cannot Call Next while awaiting_evaluations",
+      "blocking_rationale": "This is what prevents the classic end-of-day discovery that eleven evaluations were never submitted",
+      "deadlock_escape_hatch": {
+        "who": "Coordinator",
+        "requires": "written reason identifying the waived interviewer",
+        "audited": true,
+        "rationale": "Without this, one interviewer going home permanently disables a panel for the rest of the day"
+      },
+      "validation": "Submit disabled until every criterion is scored, with unscored criteria marked INLINE at the point of omission, not by a single error at the bottom"
+    },
+    "heartbeat": {
+      "interval_seconds": 30,
+      "states_requiring": [
+        "open",
+        "busy",
+        "awaiting_evaluations"
+      ],
+      "silence_threshold_minutes": 90,
+      "on_threshold": "interview transitions to flagged and appears on the operations dashboard"
+    },
+    "recusal": {
+      "who_may_declare": "any interviewer, against any applicant, at any time",
+      "reason": "optional",
+      "enforcement": "honoured by the queue claim query - a recused interviewer's panel is simply never offered that applicant",
+      "visibility": "Coordinator; permanently recorded",
+      "auto_suggest": {
+        "triggers": [
+          "exact surname match",
+          "shared phone prefix"
+        ],
+        "behaviour": "PROMPT only, never an automatic action"
+      },
+      "rationale": "Student societies are small. An interviewer will encounter their roommate."
+    },
+    "ui_rules": [
+      "No auto-advance",
+      "No auto-submit",
+      "No view change without explicit user action",
+      "An interviewer mid-sentence must never have the screen change under them"
+    ]
+  },
+  "scoring": {
+    "flow": "v2-06",
+    "corrects_v1_errors": [
+      "E2",
+      "E3"
+    ],
+    "raw_score": {
+      "formula": "sum(criterion_score * weight) / sum(weight)",
+      "scale": "0-100"
+    },
+    "bias_correction": {
+      "method": "Empirical-Bayes shrinkage",
+      "why_needed": "If Interviewer A averages 4.2 and Interviewer B averages 2.8 across the same population, an applicant's fate depends substantially on which door they walked through.",
+      "formulas": {
+        "cohort_mean": "mean of raw across EVERY evaluation in the cycle",
+        "n": "evaluations completed by this interviewer",
+        "k": 5,
+        "w": "n / (n + k)",
+        "bias": "interviewer_mean - cohort_mean",
+        "adjusted": "raw - (w * bias)"
+      },
+      "scale_invariant": "adjusted stays on the SAME 0-100 scale as raw, so the two are directly comparable and thresholds keep their plain meaning",
+      "shrinkage_table": [
+        {
+          "n": 1,
+          "w": 0.17,
+          "effect": "Almost none - one data point proves nothing about strictness"
+        },
+        {
+          "n": 5,
+          "w": 0.5,
+          "effect": "Half correction"
+        },
+        {
+          "n": 12,
+          "w": 0.71,
+          "effect": "Substantial"
+        },
+        {
+          "n": 20,
+          "w": 0.8,
+          "effect": "Strong"
+        },
+        {
+          "n": 30,
+          "w": 0.86,
+          "effect": "Near-full"
+        }
+      ],
+      "deleted_from_v1": [
+        "The n >= 8 cliff",
+        "The sigma >= 3 guard - unnecessary under shrinkage"
+      ],
+      "computed_when": "review time, against the full distribution - NOT at submission"
+    },
+    "applicant_final_score": "mean of adjusted across all evaluations of that applicant",
+    "persistence": [
+      "raw_score",
+      "adjusted_score",
+      "shrinkage_weight w"
+    ],
+    "display_rule": "Both raw AND adjusted shown side by side wherever scores are presented. The review meeting must see what actually happened, not only what the maths concluded.",
+    "flags": [
+      {
+        "flag": "HIGH_DISAGREEMENT",
+        "condition": "adjusted score spread across a panel exceeds 20 points",
+        "rationale": "Disagreement is not a bug - it is exactly the case where a human decision adds the most value, and where an automatic average silently splits the difference and hides the problem"
+      },
+      {
+        "flag": "CRITERION_FLOOR",
+        "condition": "any criterion scored 2 or below on a 5-point scale",
+        "effect": "auto-exclude regardless of rank, subject to manual override"
+      },
+      {
+        "flag": "LOW_CONFIDENCE",
+        "condition": "every evaluator of this applicant has fewer than 5 evaluations",
+        "effect": "forced into discussion band"
+      },
+      {
+        "flag": "SINGLE_EVALUATOR",
+        "condition": "only one evaluation exists",
+        "effect": "forced into discussion band"
+      }
+    ],
+    "review_bands": {
+      "corrects_v1_error": "E2",
+      "basis": "rank within department, RELATIVE TO CAPACITY - not absolute score",
+      "why": "Absolute cutoffs need recalibrating every cycle and were miscalibrated in v1. Rank scales automatically to any cohort size.",
+      "bands": [
+        {
+          "condition": "rank <= 0.75 * capacity",
+          "outcome": "clear admit",
+          "meeting_time": "none needed"
+        },
+        {
+          "condition": "0.75 * capacity < rank <= 2 * capacity",
+          "outcome": "DISCUSS at review meeting",
+          "meeting_time": "required"
+        },
+        {
+          "condition": "rank > 2 * capacity",
+          "outcome": "below the line",
+          "meeting_time": "none"
+        },
+        {
+          "condition": "any flag raised",
+          "outcome": "forced into DISCUSS",
+          "meeting_time": "required"
+        },
+        {
+          "condition": "CRITERION_FLOOR",
+          "outcome": "auto-exclude",
+          "meeting_time": "override only"
+        }
+      ],
+      "worked_example": "For an 8-place department: ranks 1-6 clear, 7-16 discussed, 17+ below. Roughly 10 discussions per department - a review meeting that actually finishes."
+    }
+  },
+  "allocation": {
+    "flow": "v2-07",
+    "corrects_v1_error": "E8",
+    "algorithm": "Applicant-proposing deferred acceptance (Gale-Shapley)",
+    "problem_statement": "Design has 8 places and 30 qualified applicants. Media has 6 places and 4 applicants. Applicant 42 preferences Design first, Media second, and ranks 11th in Design.",
+    "why_not_greedy": "Filling each department greedily by score produces unstable outcomes - applicant 42 gets nothing while Media stays empty, and someone Design rejected would have been Media's top pick.",
+    "preflight_gates": [
+      {
+        "gate": "Every interview is complete or explicitly voided",
+        "failure_code": "PREFLIGHT_FAILED",
+        "response": "list blocking records"
+      },
+      {
+        "gate": "Shrinkage adjustment computed",
+        "failure_code": "PREFLIGHT_FAILED",
+        "response": "run compute-adjustment first"
+      },
+      {
+        "gate": "Every active department has a capacity set",
+        "failure_code": "PREFLIGHT_FAILED",
+        "response": "set capacities"
+      },
+      {
+        "gate": "No other allocation holds the advisory lock",
+        "failure_code": "ALLOCATION_IN_PROGRESS",
+        "response": "reject"
+      }
+    ],
+    "advisory_lock_key": "allocation:{cycle_id}",
+    "applicant_preferences": "their ranked department choices from the application form",
+    "department_ordering": {
+      "must_be": "TOTAL and DETERMINISTIC",
+      "chain": [
+        {
+          "level": 1,
+          "criterion": "final adjusted score",
+          "direction": "descending"
+        },
+        {
+          "level": 2,
+          "criterion": "count of interviewer 'recommend for this department'",
+          "direction": "descending"
+        },
+        {
+          "level": 3,
+          "criterion": "panel score spread",
+          "direction": "ascending",
+          "note": "agreement wins ties"
+        },
+        {
+          "level": 4,
+          "criterion": "application submitted_at",
+          "direction": "ascending"
+        },
+        {
+          "level": 5,
+          "criterion": "applicant_id",
+          "direction": "ascending",
+          "note": "guarantees a total order"
+        }
+      ],
+      "why_levels_4_and_5": "They are arbitrary, and that is the point. They make the ordering total, so the algorithm returns an identical result every run. v1 stopped at level 1 and could produce different results on re-runs, which is indefensible when someone asks why they ranked below a person with the same score."
+    },
+    "loop": [
+      "Each unmatched applicant proposes to their highest-ranked department that has not yet rejected them",
+      "Each department provisionally holds its top `capacity` proposals by its own ordering and rejects the rest",
+      "Repeat until no proposals remain"
+    ],
+    "outcomes": [
+      {
+        "result": "matched",
+        "state": "selected",
+        "detail": "with department"
+      },
+      {
+        "result": "unmatched above the line",
+        "state": "waitlisted",
+        "detail": "ranked per department using the same ordering"
+      },
+      {
+        "result": "below the line or criterion floor",
+        "state": "rejected"
+      }
+    ],
+    "properties": [
+      "Stable - no applicant-department pair would both rather have each other",
+      "Applicant-optimal among all stable matchings",
+      "Explainable - for any outcome you can name which department rejected them and why",
+      "Deterministic - byte-identical results on repeated runs over unchanged input",
+      "Fast - milliseconds at any scale this system will reach"
+    ],
+    "override": {
+      "who": "dual-control Super Admin",
+      "requires": "mandatory written reason",
+      "effect": "new decision version, original retained, audited",
+      "philosophy": "The algorithm proposes; humans decide. But the default is defensible and the overrides are visible."
+    }
+  },
+  "publication": {
+    "flow": "v2-07 downstream",
+    "steps": [
+      {
+        "step": 1,
+        "actor": "Coordinator",
+        "action": "Mark review meeting complete"
+      },
+      {
+        "step": 2,
+        "actor": "President",
+        "action": "Press Lock results",
+        "result_state": "LOCK_PENDING"
+      },
+      {
+        "step": 3,
+        "actor": "General Secretary",
+        "action": "Confirm lock",
+        "constraint": "MUST be a different authenticated user; the same session cannot do both",
+        "result_state": "RESULTS_LOCKED"
+      },
+      {
+        "step": 4,
+        "actor": "system",
+        "action": "Write immutable result_snapshot with checksum"
+      },
+      {
+        "step": 5,
+        "actor": "Super Admin",
+        "action": "Publication dry run",
+        "outputs": [
+          "recipient count",
+          "per-outcome breakdown",
+          "three rendered sample emails",
+          "email validity and bounce-history exceptions",
+          "verification that no selected applicant lacks a department"
+        ]
+      },
+      {
+        "step": 6,
+        "actor": "Super Admin",
+        "action": "Publish",
+        "requires": [
+          "re-authentication including second factor",
+          "typed confirmation"
+        ],
+        "effect": "status pages update; emails dispatch through rate-limited queue"
+      }
+    ],
+    "corrections_policy": "Post-publication corrections NEVER mutate the snapshot. They create a new versioned decision and a distinct correction notice. The record of what was published stays intact - which is what you want the first time someone disputes a result."
+  },
+  "offers_and_waitlist": {
+    "expiry_days_default": 5,
+    "reminder_hours_before": 48,
+    "cascade_triggers": [
+      "decline",
+      "expiry",
+      "post-acceptance withdrawal"
+    ],
+    "cascade_steps": [
+      "Take the top-ranked waitlisted applicant for that department",
+      "Verify still eligible and not placed elsewhere; if not, mark lapsed on the waitlist and take the next",
+      "Send offer with a fresh expiry clock",
+      "Notify Super Admins and write an audit event"
+    ],
+    "stop_conditions": [
+      {
+        "condition": "waitlist exhausted",
+        "outcome": "department closes under capacity",
+        "action": "notify Super Admins"
+      },
+      {
+        "condition": "cascade manually paused",
+        "outcome": "seat held, no promotion",
+        "rationale": "near the end of a cycle you may want to close a department rather than keep cascading"
+      }
+    ]
+  },
+  "notifications": {
+    "provider": "Resend (transactional email) with delivery webhooks",
+    "matrix": [
+      {
+        "trigger": "Application submitted",
+        "channel": "email",
+        "timing": "immediate, within 60s",
+        "content": "ID, QR, status link, what happens next"
+      },
+      {
+        "trigger": "Slot booked",
+        "channel": "email",
+        "timing": "immediate",
+        "content": "Arrival window, venue, what to bring"
+      },
+      {
+        "trigger": "Interview day reminder",
+        "channel": "email",
+        "timing": "T-12h",
+        "content": "Window, venue, QR again"
+      },
+      {
+        "trigger": "Checked in",
+        "channel": "status page",
+        "timing": "real-time",
+        "content": "Position, ETA range"
+      },
+      {
+        "trigger": "Position <= 3",
+        "channel": "status page, optional SMS later",
+        "timing": "real-time",
+        "content": "Almost your turn - stay nearby"
+      },
+      {
+        "trigger": "Called",
+        "channel": "status page + display board",
+        "timing": "real-time",
+        "content": "Room number"
+      },
+      {
+        "trigger": "Skipped",
+        "channel": "status page",
+        "timing": "real-time",
+        "content": "We called and missed you - see the desk"
+      },
+      {
+        "trigger": "Interview complete",
+        "channel": "status page",
+        "timing": "real-time",
+        "content": "Complete - results by 18 March"
+      },
+      {
+        "trigger": "Result published",
+        "channel": "email + status page",
+        "timing": "on publish",
+        "content": "Outcome, department, next steps"
+      },
+      {
+        "trigger": "Offer expiring",
+        "channel": "email",
+        "timing": "T-48h",
+        "content": "Reminder with the deadline"
+      },
+      {
+        "trigger": "Waitlist promotion",
+        "channel": "email",
+        "timing": "on cascade",
+        "content": "New offer, fresh deadline"
+      }
+    ],
+    "implementation_rules": [
+      "All outbound mail goes through an asynchronous QUEUE with retry and per-provider rate limiting. Never send in the request cycle - a slow provider must not block a check-in.",
+      "Store per-recipient delivery state; consume webhooks for delivered, bounced, complained",
+      "Bounces surface on the ops dashboard as actionable items. On results day, an undelivered result is a person who does not know their outcome.",
+      "Every template is data, previewable, and versioned. Never hardcode email copy.",
+      "Suppression list respected absolutely, except for transactional result notices."
+    ],
+    "sms_note": "Worth adding later for the position <= 3 nudge only. That single message eliminates most no-shows because it reaches people who wandered off for coffee. Not needed for v1."
+  },
+  "rbac": {
+    "flow": "v2-09",
+    "roles": [
+      {
+        "role": "super_admin",
+        "holders": "President, General Secretary",
+        "mfa_required": true,
+        "session_hours": 4
+      },
+      {
+        "role": "coordinator",
+        "holders": "Floor manager",
+        "mfa_required": true,
+        "session_hours": 8,
+        "added_beyond_user_design": true,
+        "rationale": "On the day, someone must reorder the queue, reassign panels and resolve stuck interviews WITHOUT being able to see a single score. The Volunteer role cannot bump a priority; the Admin role is a data role that should not be firefighting. Separating floor authority from scoring visibility is the entire point."
+      },
+      {
+        "role": "admin",
+        "holders": "Head Batch",
+        "mfa_required": true,
+        "session_hours": 8
+      },
+      {
+        "role": "volunteer",
+        "holders": "Registration desk",
+        "mfa_required": false,
+        "session_hours": 12
+      },
+      {
+        "role": "interviewer",
+        "holders": "Panel members",
+        "mfa_required": false,
+        "session_hours": 12
+      },
+      {
+        "role": "auditor",
+        "holders": "Faculty advisor, outgoing president",
+        "mfa_required": true,
+        "session_hours": 8,
+        "added_beyond_user_design": true,
+        "rationale": "Read-only across everything including scores, write access nowhere. Being able to grant full visibility without granting any power is what makes disputes resolvable."
+      }
+    ],
+    "capability_matrix": [
+      {
+        "capability": "Create / configure cycle",
+        "super_admin": "full",
+        "coordinator": "deny",
+        "admin": "deny",
+        "volunteer": "deny",
+        "interviewer": "deny",
+        "auditor": "deny"
+      },
+      {
+        "capability": "Manage departments, rubrics",
+        "super_admin": "full",
+        "coordinator": "deny",
+        "admin": "deny",
+        "volunteer": "deny",
+        "interviewer": "deny",
+        "auditor": "deny"
+      },
+      {
+        "capability": "Advance cycle stage",
+        "super_admin": "full",
+        "coordinator": "interview stages only",
+        "admin": "deny",
+        "volunteer": "deny",
+        "interviewer": "deny",
+        "auditor": "deny"
+      },
+      {
+        "capability": "Manage users and roles",
+        "super_admin": "full",
+        "coordinator": "deny",
+        "admin": "deny",
+        "volunteer": "deny",
+        "interviewer": "deny",
+        "auditor": "deny"
+      },
+      {
+        "capability": "Register applicant",
+        "super_admin": "full",
+        "coordinator": "full",
+        "admin": "full",
+        "volunteer": "full",
+        "interviewer": "deny",
+        "auditor": "deny"
+      },
+      {
+        "capability": "View applicant profile",
+        "super_admin": "full",
+        "coordinator": "full",
+        "admin": "full",
+        "volunteer": "check-in fields only",
+        "interviewer": "assigned only",
+        "auditor": "full"
+      },
+      {
+        "capability": "Edit application answers",
+        "super_admin": "full",
+        "coordinator": "deny",
+        "admin": "pre-check-in only",
+        "volunteer": "deny",
+        "interviewer": "deny",
+        "auditor": "deny"
+      },
+      {
+        "capability": "Edit contact details",
+        "super_admin": "full",
+        "coordinator": "full",
+        "admin": "full",
+        "volunteer": "deny",
+        "interviewer": "deny",
+        "auditor": "deny"
+      },
+      {
+        "capability": "Dedupe override",
+        "super_admin": "full",
+        "coordinator": "full",
+        "admin": "full",
+        "volunteer": "with reason",
+        "interviewer": "deny",
+        "auditor": "deny"
+      },
+      {
+        "capability": "Check in / scan",
+        "super_admin": "full",
+        "coordinator": "full",
+        "admin": "full",
+        "volunteer": "full",
+        "interviewer": "deny",
+        "auditor": "deny"
+      },
+      {
+        "capability": "Adjust queue priority",
+        "super_admin": "full",
+        "coordinator": "full",
+        "admin": "deny",
+        "volunteer": "deny",
+        "interviewer": "deny",
+        "auditor": "deny"
+      },
+      {
+        "capability": "Reactivate parked applicant",
+        "super_admin": "full",
+        "coordinator": "full",
+        "admin": "full",
+        "volunteer": "full",
+        "interviewer": "deny",
+        "auditor": "deny"
+      },
+      {
+        "capability": "Open / close panels",
+        "super_admin": "full",
+        "coordinator": "full",
+        "admin": "deny",
+        "volunteer": "deny",
+        "interviewer": "deny",
+        "auditor": "deny"
+      },
+      {
+        "capability": "Call next applicant",
+        "super_admin": "deny",
+        "coordinator": "full",
+        "admin": "deny",
+        "volunteer": "deny",
+        "interviewer": "own panel only",
+        "auditor": "deny"
+      },
+      {
+        "capability": "Waive a missing evaluation",
+        "super_admin": "full",
+        "coordinator": "full",
+        "admin": "deny",
+        "volunteer": "deny",
+        "interviewer": "deny",
+        "auditor": "deny"
+      },
+      {
+        "capability": "Void / force-complete interview",
+        "super_admin": "full",
+        "coordinator": "full",
+        "admin": "deny",
+        "volunteer": "deny",
+        "interviewer": "deny",
+        "auditor": "deny"
+      },
+      {
+        "capability": "Submit evaluation",
+        "super_admin": "deny",
+        "coordinator": "deny",
+        "admin": "deny",
+        "volunteer": "deny",
+        "interviewer": "own only",
+        "auditor": "deny"
+      },
+      {
+        "capability": "View others' evaluations",
+        "super_admin": "full",
+        "coordinator": "deny",
+        "admin": "deny",
+        "volunteer": "deny",
+        "interviewer": "deny",
+        "auditor": "full"
+      },
+      {
+        "capability": "View aggregates",
+        "super_admin": "full",
+        "coordinator": "counts only, no identities",
+        "admin": "deny",
+        "volunteer": "deny",
+        "interviewer": "deny",
+        "auditor": "full"
+      },
+      {
+        "capability": "Unlock a submitted evaluation",
+        "super_admin": "full",
+        "coordinator": "deny",
+        "admin": "deny",
+        "volunteer": "deny",
+        "interviewer": "deny",
+        "auditor": "deny"
+      },
+      {
+        "capability": "Run / override allocation",
+        "super_admin": "full",
+        "coordinator": "deny",
+        "admin": "deny",
+        "volunteer": "deny",
+        "interviewer": "deny",
+        "auditor": "deny"
+      },
+      {
+        "capability": "Lock and publish results",
+        "super_admin": "dual control, two distinct users",
+        "coordinator": "deny",
+        "admin": "deny",
+        "volunteer": "deny",
+        "interviewer": "deny",
+        "auditor": "deny"
+      },
+      {
+        "capability": "Export data",
+        "super_admin": "full",
+        "coordinator": "deny",
+        "admin": "non-score aggregate",
+        "volunteer": "deny",
+        "interviewer": "deny",
+        "auditor": "aggregate"
+      },
+      {
+        "capability": "View audit log",
+        "super_admin": "full",
+        "coordinator": "own actions",
+        "admin": "own actions",
+        "volunteer": "own actions",
+        "interviewer": "own actions",
+        "auditor": "full"
+      }
+    ],
+    "multi_role": {
+      "corrects_v1_error": "E13",
+      "rule": "Where a user holds multiple roles in one cycle, effective capabilities are the UNION across all roles, computed once at session start.",
+      "deny_rules": "None exist. A capability is either granted by some role or absent. Keeps the model composable and avoids 'why can't I do this, I'm an admin' ambiguity."
+    },
+    "enforcement_layers": [
+      {
+        "layer": "database_rls",
+        "role": "The real boundary. An interviewer's connection cannot read another interviewer's evaluation rows regardless of what the API asks."
+      },
+      {
+        "layer": "api_middleware",
+        "role": "Every endpoint declares a required capability; shared middleware enforces it and returns 403 with a machine-readable reason."
+      },
+      {
+        "layer": "ui",
+        "role": "Hides what the user cannot do. ERGONOMICS ONLY. Never treat as security."
+      }
+    ],
+    "dual_control": {
+      "applies_to": [
+        "lock results",
+        "publish results",
+        "unlock results"
+      ],
+      "rule": "Two distinct authenticated Super Admin accounts. The same session cannot complete both steps.",
+      "rationale": "Ten extra seconds removes an entire category of 'who published this' from your society's future.",
+      "db_constraint": "CHECK (lock_confirmed_by IS NULL OR lock_confirmed_by <> locked_by)"
+    }
+  },
+  "realtime": {
+    "principle": "Real-time is a LAYER, not a foundation. It keeps the UI fresh; it is never the source of truth. Postgres is.",
+    "channels": [
+      {
+        "channel": "applicant:{token_hash}",
+        "subscribers": "that applicant only",
+        "payload": "own state, position, ETA, room",
+        "filter": "RLS, single row"
+      },
+      {
+        "channel": "cycle:{id}:queue",
+        "subscribers": "Coordinator, Admin",
+        "payload": "queue deltas",
+        "filter": "RLS, staff roles"
+      },
+      {
+        "channel": "cycle:{id}:panel:{pid}",
+        "subscribers": "that panel's members",
+        "payload": "current applicant, panel state",
+        "filter": "RLS, panel membership"
+      },
+      {
+        "channel": "cycle:{id}:display",
+        "subscribers": "public display board",
+        "payload": "called IDs and room, waiting count",
+        "filter": "NO NAMES, NO SCORES"
+      },
+      {
+        "channel": "cycle:{id}:ops",
+        "subscribers": "Super Admin, Coordinator",
+        "payload": "flags, stuck interviews, sync failures, bounces",
+        "filter": "RLS, staff"
+      }
+    ],
+    "channel_security_note": "Channel design is a security boundary. The display channel physically cannot carry a name because the PUBLISHER never puts one there - you are not trusting a client to omit it.",
+    "degradation_ladder": [
+      {
+        "level": 1,
+        "state": "Websocket live",
+        "behaviour": "instant updates, Live indicator"
+      },
+      {
+        "level": 2,
+        "state": "Websocket dropped",
+        "behaviour": "automatic reconnect, exponential backoff 1s, 2s, 4s, capped at 30s"
+      },
+      {
+        "level": 3,
+        "state": "Reconnect failing over 10s",
+        "behaviour": "fall back to polling every 5s; Reconnecting indicator plus last-updated time"
+      },
+      {
+        "level": 4,
+        "state": "Polling failing",
+        "behaviour": "offline mode; cached data with explicit timestamp; writes queue locally"
+      },
+      {
+        "level": 5,
+        "state": "Venue or power failure",
+        "behaviour": "printed roster and paper queue slips; bulk reconcile on recovery"
+      }
+    ],
+    "honesty_rule": "Never show stale data as if it were live. Every real-time surface carries a connection indicator and a last-updated time. An applicant who knows the number is 3 minutes old is fine; an applicant who trusts a frozen number and misses their call is not.",
+    "role_specific_offline": [
+      {
+        "role": "check-in desk",
+        "behaviour": "queue writes to IndexedDB, verification runs locally"
+      },
+      {
+        "role": "panel",
+        "behaviour": "cache evaluation locally, block Call Next"
+      },
+      {
+        "role": "applicant",
+        "behaviour": "show stale timestamp, never a fabricated live number"
+      }
+    ],
+    "idempotency": {
+      "mechanism": "Every mutating request carries a client-generated Idempotency-Key",
+      "same_key_same_hash": "replay the stored response without re-executing",
+      "same_key_different_hash": "409 IDEMPOTENCY_KEY_REUSED",
+      "expiry_hours": 24,
+      "value": "This single mechanism makes the flaky-network double-tap harmless and makes offline replay safe by construction."
+    }
+  },
+  "failure_matrix": [
+    {
+      "id": 1,
+      "scenario": "Two desks register simultaneously",
+      "unhandled_consequence": "Duplicate applicant ID",
+      "mitigation": "Per-cycle counter incremented in-transaction"
+    },
+    {
+      "id": 2,
+      "scenario": "Two volunteers scan the same QR at once",
+      "unhandled_consequence": "Two check-in records, doubled queue entry",
+      "mitigation": "Idempotency key + UNIQUE(applicant_id, stage_id) + state guard"
+    },
+    {
+      "id": 3,
+      "scenario": "Two panels press Call Next simultaneously",
+      "unhandled_consequence": "Same applicant sent to two rooms",
+      "mitigation": "FOR UPDATE SKIP LOCKED - structurally impossible"
+    },
+    {
+      "id": 4,
+      "scenario": "Volunteer double-taps check-in",
+      "unhandled_consequence": "Duplicate row",
+      "mitigation": "Same idempotency key on both taps; second replays the first response"
+    },
+    {
+      "id": 5,
+      "scenario": "Interviewer submits evaluation twice",
+      "unhandled_consequence": "Duplicate scores skew the average",
+      "mitigation": "UNIQUE(interview_id, interviewer_id); second submit enters the revision flow"
+    },
+    {
+      "id": 6,
+      "scenario": "Applicant registers online then walks in",
+      "unhandled_consequence": "Interviewed twice, corrupt statistics",
+      "mitigation": "Dedupe on normalised email, phone, roll"
+    },
+    {
+      "id": 7,
+      "scenario": "Panel device dies mid-interview",
+      "unhandled_consequence": "Applicant stuck in in_interview forever",
+      "mitigation": "Heartbeat every 30s; 90 min silence flags it; Coordinator voids or force-completes; void requeues at priority 100"
+    },
+    {
+      "id": 8,
+      "scenario": "Network drops during check-in",
+      "unhandled_consequence": "Volunteer unsure, may double-enter",
+      "mitigation": "Optimistic local write; UI states 'pending' explicitly, never 'done'"
+    },
+    {
+      "id": 9,
+      "scenario": "Device clock skew",
+      "unhandled_consequence": "Out-of-order events, wrong service times",
+      "mitigation": "Server timestamps authoritative; client timestamps stored separately for replay ordering only"
+    },
+    {
+      "id": 10,
+      "scenario": "Applicant leaves mid-queue",
+      "unhandled_consequence": "Panel idles waiting for a ghost",
+      "mitigation": "Grace window then skip then park"
+    },
+    {
+      "id": 11,
+      "scenario": "Interviewer scores their own friend",
+      "unhandled_consequence": "Compromised outcome",
+      "mitigation": "Recusal, honoured in the claim query"
+    },
+    {
+      "id": 12,
+      "scenario": "Results published with a wrong email",
+      "unhandled_consequence": "Applicant never receives their result",
+      "mitigation": "Delivery tracking via webhooks; bounces on the ops dashboard for manual follow-up"
+    },
+    {
+      "id": 13,
+      "scenario": "Super Admin publishes early by mistake",
+      "unhandled_consequence": "Irreversible reputational damage",
+      "mitigation": "Dual control + dry-run preview + typed confirmation + re-authentication"
+    },
+    {
+      "id": 14,
+      "scenario": "Score edited after publication",
+      "unhandled_consequence": "Disputed integrity of results",
+      "mitigation": "Immutable published snapshot; corrections are new versions"
+    },
+    {
+      "id": 15,
+      "scenario": "Cycle deleted or overwritten",
+      "unhandled_consequence": "Loss of all history",
+      "mitigation": "ARCHIVED cycles read-only in the database; soft delete only; no hard-delete endpoint exists"
+    },
+    {
+      "id": 16,
+      "scenario": "QR screenshot shared between two students",
+      "unhandled_consequence": "One person interviewed under another's ID",
+      "mitigation": "One active token per applicant; single-use check-in; second scan shows the earlier time and the desk sees the mismatch"
+    },
+    {
+      "id": 17,
+      "scenario": "Rubric changed mid-cycle",
+      "unhandled_consequence": "Scores measured on different scales, silently",
+      "mitigation": "Rubrics versioned; each evaluation records rubric_version_id pinned at interview START"
+    },
+    {
+      "id": 18,
+      "scenario": "Mass-email rate limit hit",
+      "unhandled_consequence": "Half the applicants receive results, half do not",
+      "mitigation": "Outbound queue with retry, per-provider rate limiting, per-recipient delivery state"
+    },
+    {
+      "id": 19,
+      "scenario": "Two Super Admins run allocation concurrently",
+      "unhandled_consequence": "Conflicting allocation results",
+      "mitigation": "Advisory lock on allocation:{cycle_id}; second run rejected"
+    },
+    {
+      "id": 20,
+      "scenario": "Interviewer forgets to submit at end of day",
+      "unhandled_consequence": "Applicant stuck, discovered days later",
+      "mitigation": "Panel blocked + ops counter + stage-close gate"
+    },
+    {
+      "id": 21,
+      "scenario": "Interviewer leaves without submitting",
+      "unhandled_consequence": "Panel disabled for the rest of the day",
+      "mitigation": "Coordinator waiver with reason"
+    },
+    {
+      "id": 22,
+      "scenario": "Recusal subquery returns NULL",
+      "unhandled_consequence": "TOTAL SILENT QUEUE STALL",
+      "mitigation": "NOT EXISTS instead of NOT IN - errata E7"
+    },
+    {
+      "id": 23,
+      "scenario": "Track with no open panel",
+      "unhandled_consequence": "Applicants wait on a fictional ETA",
+      "mitigation": "Detected at check-in; ETA suppressed; ops alert raised"
+    },
+    {
+      "id": 24,
+      "scenario": "Stage closed with interviews still running",
+      "unhandled_consequence": "Orphaned records",
+      "mitigation": "Stage-close gate blocks and lists them"
+    }
+  ],
+  "capacity_model": {
+    "purpose": "Run BEFORE the event. The single most common planning failure.",
+    "formula": "throughput_per_hour = (60 / avg_interview_minutes) * panels * utilisation",
+    "utilisation_default": 0.8,
+    "utilisation_rationale": "Accounts for changeovers, no-shows, breaks and overruns. Planning at 1.0 is how every induction day runs three hours late.",
+    "worked_example": {
+      "inputs": {
+        "avg_interview_minutes": 12,
+        "panels": 4,
+        "utilisation": 0.8
+      },
+      "throughput_per_hour": 16,
+      "applicants": 200,
+      "required_hours": 12.5,
+      "verdict": "IMPOSSIBLE IN ONE DAY",
+      "remedies": [
+        "6 or more panels",
+        "8-minute interviews",
+        "a shortlisting round before interviews"
+      ]
+    },
+    "ui_requirement": "Build as a screen. Super Admin enters expected applicants, interview length and available panels; system returns required hours, a feasibility verdict, and the minimum panel count for the available window. Then derives time-slot capacities from the same numbers.",
+    "why_it_matters": "Discovering infeasibility a week ahead is a planning decision. Discovering it at 14:00 on the day is a crisis."
+  },
+  "data_model": {
+    "database": "PostgreSQL",
+    "extensions_required": [
+      "citext",
+      "pg_trgm",
+      "pgcrypto"
+    ],
+    "migration_note": "Real migrations create users before cycles and add circular references (cycles.locked_by) as deferred constraints. Tables below are grouped by concern for readability, not dependency order.",
+    "normalisation_functions": {
+      "corrects_v1_error": "E6",
+      "norm_email": [
+        "CREATE OR REPLACE FUNCTION norm_email(addr text) RETURNS text",
+        "LANGUAGE sql IMMUTABLE STRICT AS $$",
+        "  SELECT CASE",
+        "    WHEN split_part(lower(btrim(addr)), '@', 2) IN ('gmail.com','googlemail.com')",
+        "      THEN replace(split_part(split_part(lower(btrim(addr)),'@',1), '+', 1), '.', '')",
+        "           || '@gmail.com'",
+        "    ELSE split_part(lower(btrim(addr)), '@', 1) || '@'",
+        "         || split_part(lower(btrim(addr)), '@', 2)",
+        "  END",
+        "$$;"
+      ],
+      "norm_phone": [
+        "CREATE OR REPLACE FUNCTION norm_phone(p text) RETURNS text",
+        "LANGUAGE sql IMMUTABLE STRICT AS $$",
+        "  SELECT right(regexp_replace(p, '[^0-9]', '', 'g'), 9)",
+        "$$;"
+      ],
+      "effect": "A.B+induction@Gmail.com and ab@gmail.com now genuinely collide, as v1 claimed but never implemented."
+    },
+    "enums": [
+      {
+        "name": "cycle_state",
+        "values": [
+          "draft",
+          "registration_open",
+          "registration_closed",
+          "interviews_active",
+          "interviews_closed",
+          "under_review",
+          "results_locked",
+          "published",
+          "archived"
+        ]
+      },
+      {
+        "name": "applicant_state",
+        "values": [
+          "draft",
+          "submitted",
+          "eligible",
+          "screened_out",
+          "checked_in",
+          "queued",
+          "called",
+          "in_interview",
+          "skipped",
+          "parked",
+          "interview_complete",
+          "under_review",
+          "selected",
+          "waitlisted",
+          "rejected",
+          "offer_pending",
+          "accepted",
+          "declined",
+          "lapsed",
+          "onboarded",
+          "withdrawn",
+          "no_show"
+        ]
+      },
+      {
+        "name": "queue_state",
+        "values": [
+          "waiting",
+          "called",
+          "in_interview",
+          "done",
+          "skipped",
+          "parked"
+        ]
+      },
+      {
+        "name": "role_name",
+        "values": [
+          "super_admin",
+          "coordinator",
+          "admin",
+          "volunteer",
+          "interviewer",
+          "auditor"
+        ]
+      }
+    ],
+    "tables": [
+      {
+        "name": "societies",
+        "purpose": "Top-level owner",
+        "key_columns": [
+          "id uuid pk",
+          "code char(3) unique",
+          "name text"
+        ]
+      },
+      {
+        "name": "cycles",
+        "purpose": "Induction round; global gate",
+        "key_columns": [
+          "id uuid pk",
+          "society_id fk",
+          "season char(2) CHECK IN (SP,FA,SU)",
+          "year smallint",
+          "state cycle_state",
+          "applicant_seq int DEFAULT 0",
+          "timezone text DEFAULT 'Asia/Karachi'",
+          "qr_public_key bytea",
+          "qr_private_key_enc bytea",
+          "config jsonb",
+          "locked_by uuid fk users",
+          "lock_confirmed_by uuid fk users"
+        ],
+        "constraints": [
+          "UNIQUE (society_id, season, year)",
+          "CHECK (lock_confirmed_by IS NULL OR lock_confirmed_by <> locked_by)"
+        ],
+        "notes": "qr_private_key_enc is KMS-encrypted and NEVER leaves the server (errata E1)"
+      },
+      {
+        "name": "stages",
+        "purpose": "Scheduled phase",
+        "key_columns": [
+          "id uuid pk",
+          "cycle_id fk",
+          "kind text CHECK IN (registration,interview,review,decision)",
+          "name text",
+          "starts_at timestamptz",
+          "ends_at timestamptz",
+          "is_active boolean"
+        ],
+        "constraints": [
+          "CHECK (ends_at > starts_at)"
+        ]
+      },
+      {
+        "name": "departments",
+        "purpose": "Allocation destination",
+        "key_columns": [
+          "id uuid pk",
+          "cycle_id fk",
+          "code text",
+          "name text",
+          "capacity int CHECK >= 0",
+          "is_active boolean",
+          "sort_order int"
+        ],
+        "constraints": [
+          "UNIQUE (cycle_id, code)"
+        ]
+      },
+      {
+        "name": "users",
+        "purpose": "Staff accounts, global across cycles",
+        "key_columns": [
+          "id uuid pk",
+          "email citext unique",
+          "full_name text",
+          "password_hash text",
+          "totp_secret_enc bytea",
+          "is_active boolean"
+        ]
+      },
+      {
+        "name": "memberships",
+        "purpose": "Role assignment, PER CYCLE",
+        "key_columns": [
+          "user_id fk",
+          "cycle_id fk",
+          "role role_name"
+        ],
+        "constraints": [
+          "PRIMARY KEY (user_id, cycle_id, role)"
+        ],
+        "notes": "Multiple rows per user per cycle are legal; capabilities are the UNION (errata E13)"
+      },
+      {
+        "name": "applicants",
+        "purpose": "A person applying",
+        "key_columns": [
+          "id uuid pk",
+          "cycle_id fk",
+          "display_id text",
+          "sequence int",
+          "state applicant_state -- PROJECTION ONLY",
+          "full_name text",
+          "email text",
+          "phone text",
+          "roll_number text",
+          "email_norm GENERATED AS norm_email(email) STORED",
+          "phone_norm GENERATED AS norm_phone(phone) STORED",
+          "source text CHECK IN (online,walkin_digital,walkin_paper)",
+          "dedupe_override_reason text",
+          "needs_completion boolean",
+          "answers jsonb",
+          "cv_object_key text",
+          "answers_locked_at timestamptz",
+          "slot_window_id uuid",
+          "registered_by uuid fk users"
+        ],
+        "constraints": [
+          "UNIQUE (cycle_id, display_id)",
+          "UNIQUE (cycle_id, sequence)"
+        ],
+        "indexes": [
+          "CREATE UNIQUE INDEX uq_applicant_email ON applicants (cycle_id, email_norm) WHERE state NOT IN ('withdrawn','screened_out') AND dedupe_override_reason IS NULL",
+          "CREATE UNIQUE INDEX uq_applicant_phone ON applicants (cycle_id, phone_norm) WHERE state NOT IN ('withdrawn','screened_out') AND dedupe_override_reason IS NULL",
+          "CREATE INDEX idx_applicant_name_trgm ON applicants USING gin (full_name gin_trgm_ops)"
+        ],
+        "notes": "Partial indexes fix errata E4 - the plain UNIQUE index made the documented override path impossible"
+      },
+      {
+        "name": "applicant_preferences",
+        "purpose": "Ranked department choices",
+        "key_columns": [
+          "applicant_id fk",
+          "department_id fk",
+          "rank smallint CHECK BETWEEN 1 AND 3"
+        ],
+        "constraints": [
+          "PRIMARY KEY (applicant_id, department_id)",
+          "UNIQUE (applicant_id, rank)"
+        ]
+      },
+      {
+        "name": "access_tokens",
+        "purpose": "QR and status link credential",
+        "key_columns": [
+          "id uuid pk",
+          "applicant_id fk",
+          "token_hash bytea unique -- sha256, raw NEVER stored",
+          "issued_at timestamptz",
+          "revoked_at timestamptz",
+          "expires_at timestamptz"
+        ],
+        "indexes": [
+          "CREATE UNIQUE INDEX uq_active_token ON access_tokens (applicant_id) WHERE revoked_at IS NULL"
+        ]
+      },
+      {
+        "name": "check_ins",
+        "purpose": "OWNER of the checked-in fact",
+        "key_columns": [
+          "id uuid pk",
+          "applicant_id fk",
+          "stage_id fk",
+          "method text CHECK IN (qr,manual_search,bulk_reconcile)",
+          "checked_in_by uuid fk users",
+          "device_id text",
+          "client_timestamp timestamptz",
+          "server_timestamp timestamptz DEFAULT now()"
+        ],
+        "constraints": [
+          "UNIQUE (applicant_id, stage_id) -- idempotent by construction"
+        ],
+        "notes": "server_timestamp is authoritative; client_timestamp is for offline replay ordering only"
+      },
+      {
+        "name": "tracks",
+        "purpose": "Queue lane",
+        "key_columns": [
+          "id uuid pk",
+          "cycle_id fk",
+          "code text",
+          "name text"
+        ],
+        "constraints": [
+          "UNIQUE (cycle_id, code)"
+        ]
+      },
+      {
+        "name": "rooms",
+        "purpose": "Physical location",
+        "key_columns": [
+          "id uuid pk",
+          "cycle_id fk",
+          "name text",
+          "location text"
+        ]
+      },
+      {
+        "name": "panels",
+        "purpose": "A SESSION of interviewers in a room",
+        "key_columns": [
+          "id uuid pk",
+          "cycle_id fk",
+          "room_id fk",
+          "status text CHECK IN (closed,open,busy,awaiting_evaluations,break)",
+          "opened_at timestamptz",
+          "last_heartbeat timestamptz"
+        ],
+        "notes": "awaiting_evaluations added per errata E10"
+      },
+      {
+        "name": "panel_tracks",
+        "purpose": "Which tracks a panel serves",
+        "key_columns": [
+          "panel_id fk",
+          "track_id fk"
+        ],
+        "constraints": [
+          "PRIMARY KEY (panel_id, track_id)"
+        ]
+      },
+      {
+        "name": "panel_members",
+        "purpose": "Interviewers on a panel",
+        "key_columns": [
+          "panel_id fk",
+          "interviewer_id fk users"
+        ],
+        "constraints": [
+          "PRIMARY KEY (panel_id, interviewer_id)"
+        ]
+      },
+      {
+        "name": "recusals",
+        "purpose": "Conflict of interest declaration",
+        "key_columns": [
+          "interviewer_id fk",
+          "applicant_id fk",
+          "reason text",
+          "created_at timestamptz"
+        ],
+        "constraints": [
+          "PRIMARY KEY (interviewer_id, applicant_id)"
+        ]
+      },
+      {
+        "name": "queue_entries",
+        "purpose": "AUTHORITATIVE event-day state",
+        "key_columns": [
+          "id uuid pk",
+          "cycle_id fk",
+          "applicant_id fk",
+          "track_id fk",
+          "round smallint DEFAULT 1",
+          "state queue_state",
+          "priority smallint DEFAULT 10",
+          "priority_reason text",
+          "enqueued_at timestamptz",
+          "panel_id fk",
+          "called_at timestamptz",
+          "grace_extended boolean DEFAULT false",
+          "call_count smallint DEFAULT 0"
+        ],
+        "constraints": [
+          "UNIQUE (applicant_id, track_id, round)",
+          "CHECK (priority_reason IS NOT NULL OR priority IN (5,10,30,50))"
+        ],
+        "indexes": [
+          "CREATE INDEX idx_queue_claim ON queue_entries (cycle_id, track_id, priority DESC, enqueued_at) WHERE state = 'waiting'"
+        ],
+        "notes": "The partial index is what makes the claim query fast at any scale"
+      },
+      {
+        "name": "interviews",
+        "purpose": "One panel session with one applicant",
+        "key_columns": [
+          "id uuid pk",
+          "cycle_id fk",
+          "applicant_id fk",
+          "panel_id fk",
+          "queue_entry_id fk",
+          "status text CHECK IN (in_progress,awaiting_evaluations,complete,abandoned,flagged,void)",
+          "started_at timestamptz",
+          "ended_at timestamptz",
+          "duration_secs GENERATED"
+        ]
+      },
+      {
+        "name": "rubrics",
+        "purpose": "Versioned criteria set",
+        "key_columns": [
+          "id uuid pk",
+          "cycle_id fk",
+          "department_id fk NULLABLE -- NULL means cycle default",
+          "version int",
+          "is_active boolean"
+        ],
+        "constraints": [
+          "UNIQUE (cycle_id, department_id, version)"
+        ]
+      },
+      {
+        "name": "criteria",
+        "purpose": "One scored dimension",
+        "key_columns": [
+          "id uuid pk",
+          "rubric_id fk",
+          "code text",
+          "label text",
+          "weight numeric(5,2) CHECK > 0",
+          "scale_min smallint DEFAULT 1",
+          "scale_max smallint DEFAULT 5",
+          "anchors jsonb NOT NULL",
+          "sort_order int"
+        ],
+        "notes": "Weights must sum to 100 across a rubric, enforced by trigger. Anchors are MANDATORY."
+      },
+      {
+        "name": "evaluations",
+        "purpose": "One interviewer's scoring",
+        "key_columns": [
+          "id uuid pk",
+          "interview_id fk",
+          "interviewer_id fk",
+          "rubric_id fk -- pinned at interview START",
+          "raw_score numeric(5,2)",
+          "adjusted_score numeric(5,2)",
+          "shrinkage_weight numeric(4,3)",
+          "remarks text",
+          "recommended_dept_id fk",
+          "submitted_at timestamptz",
+          "revision int DEFAULT 1",
+          "superseded_by uuid fk",
+          "waived_by uuid fk users",
+          "waiver_reason text"
+        ],
+        "constraints": [
+          "UNIQUE (interview_id, interviewer_id, revision)",
+          "CHECK (waived_by IS NULL OR waiver_reason IS NOT NULL)"
+        ]
+      },
+      {
+        "name": "score_items",
+        "purpose": "Per-criterion score",
+        "key_columns": [
+          "evaluation_id fk",
+          "criterion_id fk",
+          "score smallint"
+        ],
+        "constraints": [
+          "PRIMARY KEY (evaluation_id, criterion_id)"
+        ]
+      },
+      {
+        "name": "decisions",
+        "purpose": "Versioned outcome",
+        "key_columns": [
+          "id uuid pk",
+          "cycle_id fk",
+          "applicant_id fk",
+          "outcome text CHECK IN (selected,waitlisted,rejected)",
+          "department_id fk",
+          "waitlist_rank int",
+          "final_score numeric(5,2)",
+          "allocation_method text CHECK IN (algorithm,manual_override)",
+          "override_reason text",
+          "decided_by uuid fk",
+          "version int DEFAULT 1",
+          "is_published boolean"
+        ],
+        "constraints": [
+          "CHECK (allocation_method <> 'manual_override' OR override_reason IS NOT NULL)"
+        ]
+      },
+      {
+        "name": "offers",
+        "purpose": "Time-boxed offer",
+        "key_columns": [
+          "id uuid pk",
+          "decision_id fk",
+          "applicant_id fk",
+          "status text CHECK IN (pending,accepted,declined,lapsed,withdrawn)",
+          "sent_at timestamptz",
+          "expires_at timestamptz",
+          "responded_at timestamptz"
+        ]
+      },
+      {
+        "name": "result_snapshots",
+        "purpose": "Immutable publication record",
+        "key_columns": [
+          "id uuid pk",
+          "cycle_id fk",
+          "payload jsonb",
+          "checksum text",
+          "locked_by uuid fk",
+          "confirmed_by uuid fk",
+          "created_at timestamptz"
+        ],
+        "constraints": [
+          "CHECK (confirmed_by <> locked_by)"
+        ],
+        "notes": "Write-once. Corrections create new decision versions, never mutate this."
+      },
+      {
+        "name": "idempotency_keys",
+        "purpose": "Replay protection",
+        "key_columns": [
+          "key text pk",
+          "user_id uuid",
+          "endpoint text",
+          "request_hash text",
+          "response_body jsonb",
+          "status_code int",
+          "created_at timestamptz"
+        ],
+        "notes": "Expire after 24 hours"
+      },
+      {
+        "name": "audit_events",
+        "purpose": "Append-only change record",
+        "key_columns": [
+          "id bigserial pk",
+          "cycle_id fk",
+          "actor_id fk users",
+          "actor_role role_name",
+          "action text",
+          "entity_type text",
+          "entity_id uuid",
+          "before jsonb",
+          "after jsonb",
+          "reason text",
+          "ip inet",
+          "device_id text",
+          "created_at timestamptz"
+        ],
+        "indexes": [
+          "CREATE INDEX idx_audit_entity ON audit_events (entity_type, entity_id, created_at DESC)"
+        ],
+        "constraints": [
+          "REVOKE UPDATE, DELETE ON audit_events FROM PUBLIC"
+        ]
+      }
+    ],
+    "rls": {
+      "corrects_v1_error": "E9",
+      "binding_problem": "Under a transaction-mode connection pooler (Supabase default), a session-level SET either leaks across unrelated requests or vanishes. Either the boundary fails open or nothing works.",
+      "supported_patterns": [
+        {
+          "pattern": "A - Supabase",
+          "method": "Read from the verified JWT",
+          "example": "USING (id = (auth.jwt() ->> 'applicant_id')::uuid)"
+        },
+        {
+          "pattern": "B - own backend",
+          "method": "set_config inside the SAME transaction with is_local = true",
+          "example": "BEGIN; SELECT set_config('app.applicant_id', $1, true); ... COMMIT;"
+        }
+      ],
+      "fail_closed_rule": "Policies use nullif(current_setting('app.user_id', true), '')::uuid. If unset, the value is NULL and every comparison is NULL - zero rows. The boundary fails CLOSED, the only acceptable direction.",
+      "policies": [
+        {
+          "table": "applicants",
+          "name": "applicant_self",
+          "sql": "USING (id = nullif(current_setting('app.applicant_id', true), '')::uuid)"
+        },
+        {
+          "table": "evaluations",
+          "name": "eval_own",
+          "sql": "USING (interviewer_id = nullif(current_setting('app.user_id', true), '')::uuid)"
+        },
+        {
+          "table": "evaluations",
+          "name": "eval_privileged",
+          "sql": "USING (EXISTS (SELECT 1 FROM memberships m JOIN interviews i ON i.id = evaluations.interview_id WHERE m.user_id = nullif(current_setting('app.user_id', true), '')::uuid AND m.cycle_id = i.cycle_id AND m.role IN ('super_admin','auditor')))"
+        }
+      ],
+      "value": "With these in place, 'interviewers cannot see each other's scores' is a property of the DATABASE. A frontend bug cannot leak it; a rushed endpoint cannot leak it."
+    },
+    "time_policy": {
+      "corrects_v1_error": "E14",
+      "storage": "timestamptz everywhere",
+      "rendering": "cycles.timezone, default Asia/Karachi",
+      "forbidden": "Never store local wall-clock strings. Stage boundaries are absolute instants; '10:00' in any UI is a rendering of one."
+    }
+  },
+  "api": {
+    "style": "HTTPS REST, JSON bodies",
+    "idempotency": "Every mutating endpoint requires an Idempotency-Key header",
+    "authorisation": "Every endpoint declares a required capability, enforced by shared middleware",
+    "endpoints": [
+      {
+        "group": "applicant",
+        "method": "POST",
+        "path": "/api/apply",
+        "purpose": "Submit online application",
+        "auth": "public"
+      },
+      {
+        "group": "applicant",
+        "method": "GET",
+        "path": "/api/q/:token",
+        "purpose": "Resolve token to status page payload",
+        "auth": "token"
+      },
+      {
+        "group": "applicant",
+        "method": "GET",
+        "path": "/api/q/:token/status",
+        "purpose": "Polling fallback for the live view",
+        "auth": "token"
+      },
+      {
+        "group": "applicant",
+        "method": "POST",
+        "path": "/api/q/:token/on-my-way",
+        "purpose": "One-time 2-minute grace extension",
+        "auth": "token"
+      },
+      {
+        "group": "applicant",
+        "method": "POST",
+        "path": "/api/q/:token/offer/respond",
+        "purpose": "Accept or decline an offer",
+        "auth": "token"
+      },
+      {
+        "group": "applicant",
+        "method": "POST",
+        "path": "/api/q/:token/withdraw",
+        "purpose": "Applicant self-withdrawal",
+        "auth": "token"
+      },
+      {
+        "group": "registration",
+        "method": "POST",
+        "path": "/api/cycles/:id/applicants",
+        "purpose": "Create walk-in or paper transcription",
+        "auth": "volunteer+"
+      },
+      {
+        "group": "registration",
+        "method": "GET",
+        "path": "/api/cycles/:id/applicants/search",
+        "purpose": "Desk lookup by ID, name, phone, roll",
+        "auth": "volunteer+"
+      },
+      {
+        "group": "registration",
+        "method": "POST",
+        "path": "/api/applicants/:id/dedupe-override",
+        "purpose": "Override duplicate block",
+        "auth": "volunteer+",
+        "requires": "reason"
+      },
+      {
+        "group": "checkin",
+        "method": "POST",
+        "path": "/api/checkins",
+        "purpose": "Check an applicant in",
+        "auth": "volunteer+"
+      },
+      {
+        "group": "checkin",
+        "method": "POST",
+        "path": "/api/checkins/bulk-reconcile",
+        "purpose": "Paper-fallback recovery",
+        "auth": "coordinator+"
+      },
+      {
+        "group": "checkin",
+        "method": "GET",
+        "path": "/api/cycles/:id/roster",
+        "purpose": "Offline bundle - hashes plus public key",
+        "auth": "volunteer+"
+      },
+      {
+        "group": "queue",
+        "method": "GET",
+        "path": "/api/cycles/:id/queue",
+        "purpose": "Full queue view",
+        "auth": "admin+"
+      },
+      {
+        "group": "queue",
+        "method": "POST",
+        "path": "/api/panels/:id/call-next",
+        "purpose": "Atomic claim",
+        "auth": "interviewer own panel"
+      },
+      {
+        "group": "queue",
+        "method": "POST",
+        "path": "/api/queue/:eid/skip",
+        "purpose": "Mark skipped",
+        "auth": "panel|coordinator"
+      },
+      {
+        "group": "queue",
+        "method": "POST",
+        "path": "/api/queue/:eid/reactivate",
+        "purpose": "Un-park",
+        "auth": "volunteer+"
+      },
+      {
+        "group": "queue",
+        "method": "POST",
+        "path": "/api/queue/:eid/requeue",
+        "purpose": "Return to waiting",
+        "auth": "coordinator+"
+      },
+      {
+        "group": "queue",
+        "method": "PATCH",
+        "path": "/api/queue/:eid/priority",
+        "purpose": "Adjust priority",
+        "auth": "coordinator+",
+        "requires": "reason"
+      },
+      {
+        "group": "panels",
+        "method": "POST",
+        "path": "/api/panels/:id/open",
+        "purpose": "Open panel",
+        "auth": "coordinator+"
+      },
+      {
+        "group": "panels",
+        "method": "POST",
+        "path": "/api/panels/:id/close",
+        "purpose": "Close panel",
+        "auth": "coordinator+"
+      },
+      {
+        "group": "panels",
+        "method": "POST",
+        "path": "/api/panels/:id/break",
+        "purpose": "Panel on break",
+        "auth": "coordinator+"
+      },
+      {
+        "group": "panels",
+        "method": "POST",
+        "path": "/api/panels/:id/heartbeat",
+        "purpose": "Liveness, every 30s",
+        "auth": "panel"
+      },
+      {
+        "group": "interviews",
+        "method": "POST",
+        "path": "/api/interviews/:id/start",
+        "purpose": "Begin interview",
+        "auth": "panel"
+      },
+      {
+        "group": "interviews",
+        "method": "POST",
+        "path": "/api/interviews/:id/evaluations",
+        "purpose": "Submit evaluation, immutable",
+        "auth": "interviewer"
+      },
+      {
+        "group": "interviews",
+        "method": "PATCH",
+        "path": "/api/evaluations/:id",
+        "purpose": "Revision within 15 min",
+        "auth": "interviewer",
+        "requires": "reason"
+      },
+      {
+        "group": "interviews",
+        "method": "POST",
+        "path": "/api/evaluations/:id/waive",
+        "purpose": "Waive a missing evaluation",
+        "auth": "coordinator+",
+        "requires": "reason"
+      },
+      {
+        "group": "interviews",
+        "method": "POST",
+        "path": "/api/interviews/:id/void",
+        "purpose": "Void with reason",
+        "auth": "coordinator+"
+      },
+      {
+        "group": "interviews",
+        "method": "POST",
+        "path": "/api/interviews/:id/force-complete",
+        "purpose": "Resolve stuck record",
+        "auth": "coordinator+"
+      },
+      {
+        "group": "decisions",
+        "method": "POST",
+        "path": "/api/cycles/:id/compute-adjustment",
+        "purpose": "Run shrinkage",
+        "auth": "super_admin"
+      },
+      {
+        "group": "decisions",
+        "method": "GET",
+        "path": "/api/cycles/:id/review-queue",
+        "purpose": "Capacity-relative bands plus flags",
+        "auth": "super_admin"
+      },
+      {
+        "group": "decisions",
+        "method": "POST",
+        "path": "/api/cycles/:id/allocate",
+        "purpose": "Deterministic allocation, advisory-locked",
+        "auth": "super_admin"
+      },
+      {
+        "group": "decisions",
+        "method": "PATCH",
+        "path": "/api/decisions/:id",
+        "purpose": "Manual override",
+        "auth": "super_admin",
+        "requires": "reason"
+      },
+      {
+        "group": "decisions",
+        "method": "POST",
+        "path": "/api/cycles/:id/lock",
+        "purpose": "Dual control step 1",
+        "auth": "super_admin"
+      },
+      {
+        "group": "decisions",
+        "method": "POST",
+        "path": "/api/cycles/:id/lock/confirm",
+        "purpose": "Dual control step 2, different user",
+        "auth": "super_admin"
+      },
+      {
+        "group": "decisions",
+        "method": "POST",
+        "path": "/api/cycles/:id/publish/dry-run",
+        "purpose": "Counts plus sample emails plus validation",
+        "auth": "super_admin"
+      },
+      {
+        "group": "decisions",
+        "method": "POST",
+        "path": "/api/cycles/:id/publish",
+        "purpose": "Execute publication",
+        "auth": "super_admin",
+        "requires": "re-auth plus typed confirmation"
+      },
+      {
+        "group": "ops",
+        "method": "GET",
+        "path": "/api/cycles/:id/ops",
+        "purpose": "Flags, stuck, pending evals, bounces",
+        "auth": "coordinator+"
+      },
+      {
+        "group": "ops",
+        "method": "GET",
+        "path": "/api/cycles/:id/capacity-model",
+        "purpose": "Throughput feasibility",
+        "auth": "coordinator+"
+      },
+      {
+        "group": "ops",
+        "method": "POST",
+        "path": "/api/cycles/:id/stage/:sid/close",
+        "purpose": "Gated stage close",
+        "auth": "coordinator+"
+      },
+      {
+        "group": "ops",
+        "method": "POST",
+        "path": "/api/cycles/:id/export",
+        "purpose": "Scope-limited, audited export",
+        "auth": "role-dependent"
+      },
+      {
+        "group": "ops",
+        "method": "GET",
+        "path": "/api/cycles/:id/audit",
+        "purpose": "Filterable audit log",
+        "auth": "role-dependent"
+      }
+    ],
+    "error_contract": {
+      "shape": {
+        "error": {
+          "code": "string",
+          "message": "string",
+          "detail": "object",
+          "retryable": "boolean"
+        }
+      },
+      "example": {
+        "error": {
+          "code": "INVALID_TRANSITION",
+          "message": "Applicant is already checked in",
+          "detail": {
+            "current_state": "queued",
+            "attempted": "checked_in",
+            "at": "10:14"
+          },
+          "retryable": false
+        }
+      },
+      "codes": [
+        "INVALID_TRANSITION",
+        "IDEMPOTENCY_KEY_REUSED",
+        "QUEUE_EMPTY",
+        "RECUSAL_CONFLICT",
+        "STAGE_CLOSED",
+        "STAGE_HAS_ACTIVE_INTERVIEWS",
+        "DUPLICATE_APPLICANT",
+        "DUAL_CONTROL_REQUIRED",
+        "CYCLE_ARCHIVED",
+        "RATE_LIMITED",
+        "TOKEN_INVALID",
+        "TOKEN_EXPIRED",
+        "ALLOCATION_IN_PROGRESS",
+        "PREFLIGHT_FAILED"
+      ]
+    },
+    "external_dependency_rule": "No external service may sit in the SYNCHRONOUS path of check-in, queue claim or evaluation submission."
+  },
+  "security": {
+    "authentication": [
+      {
+        "actor": "applicant",
+        "method": "Token URL, no account; optional emailed OTP to view results",
+        "session": "token-scoped, 60 days"
+      },
+      {
+        "actor": "volunteer",
+        "method": "Password or society SSO",
+        "session": "12h, device-bound"
+      },
+      {
+        "actor": "interviewer",
+        "method": "Password or society SSO",
+        "session": "12h, device-bound"
+      },
+      {
+        "actor": "coordinator",
+        "method": "Password + TOTP",
+        "session": "8h"
+      },
+      {
+        "actor": "admin",
+        "method": "Password + TOTP",
+        "session": "8h"
+      },
+      {
+        "actor": "super_admin",
+        "method": "Password + TOTP, re-auth to lock/publish",
+        "session": "4h"
+      }
+    ],
+    "transport": [
+      "TLS 1.3",
+      "HSTS"
+    ],
+    "at_rest": [
+      "Database encryption",
+      "qr_private_key_enc and totp_secret_enc additionally encrypted at the application layer with a KMS-held key"
+    ],
+    "key_rule": "The Ed25519 PRIVATE key never leaves the server. No private key material is transmitted to any client device under any circumstance.",
+    "rate_limits": [
+      {
+        "target": "token lookup",
+        "limit": "10 per minute per IP"
+      },
+      {
+        "target": "application submission",
+        "limit": "3 per hour per IP"
+      },
+      {
+        "target": "login",
+        "limit": "5 attempts per 15 minutes per account, progressive backoff"
+      }
+    ],
+    "hardening": [
+      "Bot protection on the public form (Turnstile or equivalent)",
+      "Content Security Policy",
+      "X-Frame-Options: DENY",
+      "Strict CORS",
+      "Secrets in a manager, never in the repository",
+      "Dependency vulnerability scan on every build, critical findings fail the build",
+      "All inputs validated server-side against a schema"
+    ],
+    "backups": {
+      "frequency": "daily",
+      "encrypted": true,
+      "restore_test": "verified within the 7 days preceding each cycle's first interview stage",
+      "note": "An untested backup is not a backup."
+    }
+  },
+  "privacy": {
+    "minimum_collection": "Do not collect CNIC, date of birth or home address unless a specific process step requires it.",
+    "purpose_limitation": "Recruitment data is not used for mailing lists. Marketing consent is a separate, explicit, opt-in checkbox.",
+    "retention": {
+      "pii_cycles": 2,
+      "then": "automatic anonymisation - scores and aggregates retained for year-over-year analysis, identities stripped",
+      "audit_years": 3,
+      "logs_days": 90,
+      "rationale": "Institutional memory without an ever-growing pile of student PII."
+    },
+    "subject_rights": "Any applicant may request their own data export or deletion via their token link.",
+    "exports": "Audited and watermarked with the exporting user's identity. Score exports are Super Admin only.",
+    "display_board": "IDs only, no names. A public screen of names is an avoidable privacy leak and, in a room full of students who know each other, a source of unnecessary social pressure. The ID is on their slip and their phone; that is enough.",
+    "logs": "Structured logs must not contain raw tokens, passwords or CV content."
+  },
+  "design_system": {
+    "source": "Generated with the ui-ux-pro-max skill, then corrected where its output conflicted with its own rules or with this product.",
+    "style": "Data-Dense Dashboard",
+    "style_rationale": "KPI cards, tables, minimal padding, maximum data visibility. Correct for an operations tool.",
+    "skill_output_overrides": [
+      {
+        "element": "Pattern",
+        "skill_output": "Enterprise Gateway - hero video, solutions by industry, client logos, Contact Sales",
+        "decision": "DISCARDED",
+        "reason": "That is a marketing site pattern. Nobody signs up for an internal queue console. Wrong artifact entirely."
+      },
+      {
+        "element": "Text colour",
+        "skill_output": "#1E3A8A navy blue",
+        "decision": "OVERRIDDEN to #0F172A",
+        "reason": "The skill's own Common Rules require #0F172A for light-mode body text and #475569 minimum for muted. Blue body text fails both, and at 14px on a phone in a bright hall it is measurably harder to read."
+      },
+      {
+        "element": "CTA colour",
+        "skill_output": "#F59E0B amber",
+        "decision": "OVERRIDDEN to primary blue",
+        "reason": "Amber must be reserved for WARNING semantics. This product is a state machine; using one amber for 'primary button' and 'you are offline' would create exactly the confusion we are trying to eliminate."
+      },
+      {
+        "element": "Typography",
+        "skill_output": "Fira Code headings + Fira Sans body",
+        "decision": "REFINED",
+        "reason": "Fira Sans for ALL interface text. Fira Mono reserved for applicant IDs, clock times and counts. Monospace headings look like a terminal; monospace IDs make SPH-SP26-0042 instantly scannable and stop digits jittering as counters tick."
+      },
+      {
+        "element": "State colours",
+        "skill_output": "not provided",
+        "decision": "ADDED",
+        "reason": "The single most important decision here, and the skill has no state system. This product is a queue - every screen answers 'what state am I in?'"
+      }
+    ],
+    "tokens": {
+      "colour": {
+        "primary": "#1E40AF",
+        "primary_hover": "#1D4ED8",
+        "secondary": "#3B82F6",
+        "focus_ring": "#3B82F6 at 3px, offset 2px",
+        "background": "#F8FAFC",
+        "surface": "#FFFFFF",
+        "border": "#E2E8F0",
+        "border_strong": "#CBD5E1",
+        "text": "#0F172A",
+        "text_muted": "#475569"
+      },
+      "typography": {
+        "ui_font": "Fira Sans",
+        "mono_font": "Fira Mono",
+        "mono_usage": "applicant IDs, clock times, counts only",
+        "scale": [
+          {
+            "name": "display",
+            "size": 32,
+            "line": 40,
+            "weight": 600
+          },
+          {
+            "name": "h1",
+            "size": 24,
+            "line": 32,
+            "weight": 600
+          },
+          {
+            "name": "h2",
+            "size": 20,
+            "line": 28,
+            "weight": 600
+          },
+          {
+            "name": "body",
+            "size": 16,
+            "line": 24,
+            "weight": 400
+          },
+          {
+            "name": "small",
+            "size": 14,
+            "line": 20,
+            "weight": 400
+          },
+          {
+            "name": "caption",
+            "size": 12,
+            "line": 16,
+            "weight": 500,
+            "tracking": "0.04em"
+          },
+          {
+            "name": "id-xl",
+            "size": 28,
+            "font": "mono",
+            "weight": 500
+          },
+          {
+            "name": "id-md",
+            "size": 18,
+            "font": "mono",
+            "weight": 500
+          },
+          {
+            "name": "id-sm",
+            "size": 14,
+            "font": "mono",
+            "weight": 500
+          }
+        ]
+      },
+      "space": [
+        4,
+        8,
+        12,
+        16,
+        24,
+        32,
+        48
+      ],
+      "radius": {
+        "default": 8,
+        "card": 12,
+        "pill": 999
+      },
+      "touch": {
+        "min_target_px": 44,
+        "min_gap_px": 8
+      },
+      "motion": {
+        "duration_ms": "150-250",
+        "easing": "ease-out",
+        "reduced_motion": "honoured - removes pulse and all transitions"
+      }
+    },
+    "state_colours": [
+      {
+        "state": "waiting",
+        "colour": "#64748B",
+        "fill": "#F1F5F9",
+        "shape_signal": "hollow dot"
+      },
+      {
+        "state": "live_in_progress",
+        "colour": "#2563EB",
+        "fill": "#EFF6FF",
+        "shape_signal": "pulsing dot"
+      },
+      {
+        "state": "called_act_now",
+        "colour": "#D97706",
+        "fill": "#FFFBEB",
+        "shape_signal": "solid bar, 4px left edge"
+      },
+      {
+        "state": "complete",
+        "colour": "#059669",
+        "fill": "#ECFDF5",
+        "shape_signal": "check"
+      },
+      {
+        "state": "blocked_error",
+        "colour": "#DC2626",
+        "fill": "#FEF2F2",
+        "shape_signal": "cross"
+      },
+      {
+        "state": "offline_degraded",
+        "colour": "#B45309",
+        "fill": "diagonal stripes",
+        "shape_signal": "banner plus stripe pattern"
+      }
+    ],
+    "colour_rule": "Colour is NEVER the only indicator. Each state carries a distinct icon AND a distinct shape. This is a WCAG requirement and also just correct: about 1 in 12 men has a colour-vision deficiency, which at a university induction is several people in the hall - including, statistically, one of your volunteers.",
+    "anti_patterns": [
+      {
+        "never": "Confirmation dialog on check-in",
+        "why": "200 scans times one tap equals 200 chances to double-tap and 200 wasted seconds"
+      },
+      {
+        "never": "Red for 'already checked in'",
+        "why": "It is not an error; red in front of a nervous applicant reads as 'you have a problem'"
+      },
+      {
+        "never": "Spinner with no context on the applicant page",
+        "why": "Someone waiting 40 minutes needs 'we are reconnecting', not an ambiguous circle"
+      },
+      {
+        "never": "A single precise ETA such as '14 minutes'",
+        "why": "Read as a promise; every broken promise costs trust"
+      },
+      {
+        "never": "Names on the public display board",
+        "why": "Avoidable privacy leak, and social pressure in a room full of peers"
+      },
+      {
+        "never": "Score or rank anywhere an interviewer can see",
+        "why": "Destroys independence, the entire point of blind evaluation"
+      },
+      {
+        "never": "Auto-advancing the panel screen",
+        "why": "An interviewer mid-sentence must never have the screen change under them"
+      },
+      {
+        "never": "A disabled control with no explanation",
+        "why": "The user cannot tell whether it is broken or forbidden"
+      }
+    ]
+  },
+  "screens": [
+    {
+      "id": "applicant_status",
+      "name": "Applicant status page",
+      "audience": "applicant",
+      "stakes": "highest - 200 anxious people stare at this for up to an hour",
+      "must_answer_without_scrolling": [
+        "Am I in?",
+        "Where am I?",
+        "What do I do now?"
+      ],
+      "structure_top_to_bottom": [
+        {
+          "order": 1,
+          "element": "ID chip",
+          "detail": "SPH-SP26-0042, mono, always visible at top"
+        },
+        {
+          "order": 2,
+          "element": "Status band",
+          "detail": "full width, state-coloured, icon plus one line"
+        },
+        {
+          "order": 3,
+          "element": "The one number",
+          "detail": "position, or ROOM NUMBER when called - the largest thing on screen"
+        },
+        {
+          "order": 4,
+          "element": "Supporting",
+          "detail": "estimated range, or the instruction when called"
+        },
+        {
+          "order": 5,
+          "element": "Guidance",
+          "detail": "one sentence, plain language"
+        },
+        {
+          "order": 6,
+          "element": "Liveness",
+          "detail": "Live - updated just now, or Reconnecting - updated 10:41"
+        }
+      ],
+      "states": [
+        {
+          "state": "registered",
+          "band": "slate",
+          "the_one_number": null,
+          "guidance": "Check in at the desk when you arrive"
+        },
+        {
+          "state": "checked_in",
+          "band": "blue pulsing",
+          "the_one_number": "12",
+          "guidance": "Stay in the building - we'll call you here"
+        },
+        {
+          "state": "position_le_3",
+          "band": "blue pulsing",
+          "the_one_number": "2",
+          "guidance": "Almost your turn - stay nearby"
+        },
+        {
+          "state": "called",
+          "band": "AMBER FULL BLEED",
+          "the_one_number": "ROOM 2",
+          "guidance": "Go now - 5 minutes",
+          "extra": "'I'm on my way' button, 44px, disabled after use with text changed to 'Extended - 2 extra minutes'"
+        },
+        {
+          "state": "skipped",
+          "band": "amber",
+          "the_one_number": null,
+          "guidance": "We called and missed you - see the desk"
+        },
+        {
+          "state": "in_interview",
+          "band": "blue",
+          "the_one_number": null,
+          "guidance": "Good luck"
+        },
+        {
+          "state": "complete",
+          "band": "emerald",
+          "the_one_number": null,
+          "guidance": "Results by 18 March"
+        },
+        {
+          "state": "result",
+          "band": "emerald or slate",
+          "the_one_number": "Department",
+          "guidance": "Accept / Decline, deadline visible"
+        }
+      ],
+      "micro_decisions": [
+        "The CALLED state takes over the whole screen - colour, size, and the only button. Missing your call because the room number sat in a corner is the worst avoidable outcome on the page.",
+        "Never show a spinner alone. Every reconnecting state keeps the last known number visible with an explicit timestamp. Blanking the screen on someone in position 3 is cruel.",
+        "No other applicant's data appears anywhere - enforced by RLS, not by the template.",
+        "The ETA is a range, and if it rises the reason appears with it."
+      ]
+    },
+    {
+      "id": "volunteer_scanner",
+      "name": "Volunteer scanner",
+      "audience": "volunteer",
+      "context": "one-handed, in a queue, under fluorescent light, 15 minutes of training",
+      "layout": [
+        "Header: desk name, day, connection state always visible",
+        "Live camera, always running, approx 60 percent of height",
+        "Persistent search field by name or ID, 44px, thumb-reachable"
+      ],
+      "result_overlay": [
+        {
+          "outcome": "success",
+          "colour": "emerald",
+          "content": "ID mono 28px, name, track, position",
+          "dwell": "2.5s auto"
+        },
+        {
+          "outcome": "already_checked_in",
+          "colour": "AMBER",
+          "content": "Checked in 10:14, position 12",
+          "dwell": "2.5s auto"
+        },
+        {
+          "outcome": "not_eligible",
+          "colour": "red",
+          "content": "Reason plus 'See Coordinator'",
+          "dwell": "requires dismissal"
+        },
+        {
+          "outcome": "invalid_code",
+          "colour": "red",
+          "content": "Not a valid SOPHEP code, plus Search button",
+          "dwell": "requires dismissal"
+        },
+        {
+          "outcome": "no_record",
+          "colour": "blue",
+          "content": "Register and check in, primary action",
+          "dwell": "requires dismissal"
+        }
+      ],
+      "dwell_rationale": "Successes auto-clear so the volunteer never taps. Failures require dismissal, because a failure that scrolls past unnoticed becomes a person nobody checked in.",
+      "offline_banner": "Persistent, amber, striped, live pending count, tappable to list pending items. This is the difference between a volunteer who trusts the device and one who starts keeping a paper list in parallel out of anxiety."
+    },
+    {
+      "id": "panel_screen",
+      "name": "Panel / interviewer screen",
+      "audience": "interviewer",
+      "states": [
+        {
+          "state": "idle",
+          "content": "One enormous Call Next button, minimum 56px tall, waiting count for this track, parked count if any. Nothing else, so a tired interviewer cannot mis-tap into something destructive."
+        },
+        {
+          "state": "called",
+          "content": "Applicant name and ID, visible grace countdown, two large well-separated actions: Start and Mark absent. No confirmation on Start."
+        },
+        {
+          "state": "in_interview",
+          "content": "Profile and answers left, rubric right. Each criterion shows anchors INLINE - you should not have to remember what 3 means. Elapsed timer against target, amber past target, never blocking. Submit disabled until every criterion is scored, with missing ones marked inline."
+        },
+        {
+          "state": "awaiting_evaluations",
+          "content": "Shows exactly WHO has not submitted, plus the Coordinator waiver action. Call Next unavailable, and the screen says WHY in one sentence - never a greyed-out button with no explanation."
+        }
+      ]
+    },
+    {
+      "id": "coordinator_ops",
+      "name": "Coordinator operations dashboard",
+      "audience": "coordinator",
+      "rows": [
+        {
+          "row": 1,
+          "content": "KPI strip: Waiting, In interview, Completed, Parked, Panels open"
+        },
+        {
+          "row": 2,
+          "content": "ACTION REQUIRED - red/amber. Flagged panels with no heartbeat, parked applicants needing location, outstanding evaluations by name, tracks with no open panel, delivery bounces"
+        },
+        {
+          "row": 3,
+          "content": "Live queue, sortable, with per-row priority-bump action"
+        },
+        {
+          "row": 4,
+          "content": "Panels: status, current applicant, elapsed, throughput"
+        }
+      ],
+      "key_rule": "Action Required is the top of the page and is never empty-by-omission. When there is nothing to do it says so explicitly. A blank area is ambiguous; 'All clear' is information.",
+      "usage_guidance": "If Action Required is empty and panels are busy, the system is working and you should be talking to applicants, not looking at a screen."
+    },
+    {
+      "id": "display_board",
+      "name": "Public display board",
+      "audience": "everyone in the waiting area",
+      "content": "NOW CALLING, then ID to ROOM pairs, then waiting count and average wait",
+      "constraints": [
+        "IDs only, never names",
+        "Large mono type readable at 15 metres",
+        "High contrast",
+        "No animation beyond a gentle fade on change - motion on a wall screen in peripheral vision distracts everyone waiting"
+      ]
+    }
+  ],
+  "accessibility": {
+    "target": "WCAG 2.1 Level AA",
+    "requirements": [
+      "Contrast at least 4.5:1 for body text, 3:1 for large text and UI boundaries",
+      "Every state carries an icon and a shape, not only a colour",
+      "Touch targets at least 44x44px with at least 8px gaps",
+      "Visible focus rings; full keyboard operation of every staff screen",
+      "role='alert' on scan results and errors so screen readers announce them",
+      "prefers-reduced-motion removes the pulse and all transitions",
+      "Correct inputmode on every field: tel for phone, email for email, numeric for ID search",
+      "Renders without horizontal scroll at 375px, 768px, 1024px and 1440px"
+    ]
+  },
+  "requirements_summary": {
+    "standard": "ISO/IEC/IEEE 29148:2018",
+    "totals": {
+      "functional": 158,
+      "non_functional": 65,
+      "data": 9,
+      "interface": 6,
+      "total": 238
+    },
+    "by_priority": {
+      "must": 204,
+      "should": 34,
+      "could": 0
+    },
+    "could_policy": "No requirement is classified Could. Anything that did not earn Must or Should was removed during authoring rather than retained as aspiration - an unprioritised requirement is one nobody will verify.",
+    "id_scheme": "<TYPE>-<DOMAIN>-<NNN>",
+    "domains": [
+      "FR-CYC cycle and stage",
+      "FR-IDT identity and tokens",
+      "FR-REG registration",
+      "FR-CHK check-in",
+      "FR-QUE queue",
+      "FR-INT interview",
+      "FR-SCR scoring",
+      "FR-DEC decisions",
+      "FR-OFF offers",
+      "FR-NOT notifications",
+      "FR-RBAC access control",
+      "FR-AUD audit",
+      "FR-OPS operations and state integrity",
+      "NFR-PERF",
+      "NFR-SCAL",
+      "NFR-AVAIL",
+      "NFR-SEC",
+      "NFR-PRIV",
+      "NFR-A11Y",
+      "NFR-USE",
+      "NFR-MAIN",
+      "NFR-COMP",
+      "DR data",
+      "IR interface"
+    ],
+    "verification_methods": {
+      "T": "Test - automated case",
+      "D": "Demonstration - witnessed execution",
+      "I": "Inspection - code, schema or config review",
+      "A": "Analysis - load test, model or calculation"
+    },
+    "definition_of_done": [
+      "Implementation merged",
+      "Verification evidence recorded against the stated method",
+      "Traceability link to architecture section and flow diagram confirmed accurate",
+      "For any Must requirement, no known defect remains open"
+    ],
+    "full_document": "See SOPHEP-RMS-TRD-001 for all 238 requirement statements with priority, verification method and traceability."
+  },
+  "key_performance_targets": [
+    {
+      "id": "NFR-PERF-001",
+      "metric": "QR decode latency, camera frame to decoded payload",
+      "target": "<= 500 ms p95"
+    },
+    {
+      "id": "NFR-PERF-002",
+      "metric": "Check-in API response",
+      "target": "<= 300 ms p95"
+    },
+    {
+      "id": "NFR-PERF-003",
+      "metric": "End-to-end check-in, code presented to confirmation displayed",
+      "target": "<= 8 s p95"
+    },
+    {
+      "id": "NFR-PERF-004",
+      "metric": "Queue claim operation",
+      "target": "<= 200 ms p95"
+    },
+    {
+      "id": "NFR-PERF-005",
+      "metric": "Real-time propagation, commit to client render",
+      "target": "<= 2 s p95"
+    },
+    {
+      "id": "NFR-PERF-006",
+      "metric": "Applicant status page LCP on throttled 3G",
+      "target": "<= 2.5 s"
+    },
+    {
+      "id": "NFR-PERF-007",
+      "metric": "Ops dashboard initial render, 500 queue entries",
+      "target": "<= 1.5 s"
+    },
+    {
+      "id": "NFR-PERF-008",
+      "metric": "Allocation, 1000 applicants across 10 departments",
+      "target": "<= 5 s"
+    },
+    {
+      "id": "NFR-PERF-009",
+      "metric": "Offline roster bundle, 500 applicants",
+      "target": "<= 100 KB"
+    },
+    {
+      "id": "NFR-PERF-010",
+      "metric": "Result publication, 1000 messages enqueued",
+      "target": "<= 60 s"
+    },
+    {
+      "id": "NFR-SCAL-001",
+      "metric": "Concurrent load",
+      "target": "250 applicant sessions, 30 staff sessions, 10 panels, 4 check-in devices"
+    },
+    {
+      "id": "NFR-SCAL-002",
+      "metric": "Applicants per cycle without architectural change",
+      "target": "1000"
+    },
+    {
+      "id": "NFR-SCAL-003",
+      "metric": "Queue claim latency degradation, 50 to 1000 waiting entries",
+      "target": "<= 20 percent"
+    },
+    {
+      "id": "NFR-AVAIL-001",
+      "metric": "Availability during scheduled interview windows",
+      "target": ">= 99.5 percent"
+    },
+    {
+      "id": "NFR-AVAIL-006",
+      "metric": "RPO during an active interview stage",
+      "target": "<= 5 minutes"
+    },
+    {
+      "id": "NFR-AVAIL-007",
+      "metric": "RTO",
+      "target": "<= 4 hours"
+    },
+    {
+      "id": "FR-CHK-012",
+      "metric": "Offline operation duration and buffer",
+      "target": "8 hours, 500 pending operations"
+    },
+    {
+      "id": "NFR-USE-002",
+      "metric": "Untrained volunteer completes first successful check-in",
+      "target": "<= 60 seconds, no written instruction"
+    }
+  ],
+  "scale_path": [
+    {
+      "applicants": "<= 500 (today)",
+      "architecture": "Single Postgres, Supabase Realtime, Vercel",
+      "bottleneck": "None - this is small"
+    },
+    {
+      "applicants": "<= 5000",
+      "architecture": "Add read replica for analytics; queue index already correct",
+      "bottleneck": "Realtime fan-out"
+    },
+    {
+      "applicants": "<= 50000",
+      "architecture": "Shard applicant_seq into 8 counters per cycle (ID becomes SPH-SP26-3-0041); partition audit_events by month",
+      "bottleneck": "Registration counter, audit table growth"
+    },
+    {
+      "applicants": "multi-society",
+      "architecture": "society_id on every root table; RLS extended to society scope; per-society Ed25519 keys",
+      "bottleneck": "Tenant isolation review"
+    }
+  ],
+  "scale_invariants": {
+    "does_not_need_to_change": [
+      "The queue claim query - SKIP LOCKED scales with panels, not applicants",
+      "The state machines",
+      "The permission model",
+      "The audit design"
+    ],
+    "hard_to_retrofit_build_now": [
+      "Cycle scoping on every table",
+      "The append-only audit log",
+      "State ownership",
+      "Queue claim semantics"
+    ]
+  },
+  "tech_stack": {
+    "recommended": [
+      {
+        "layer": "Frontend",
+        "choice": "Next.js App Router, TypeScript, Tailwind",
+        "why": "One codebase for public form, staff app, applicant view, display board"
+      },
+      {
+        "layer": "Check-in app",
+        "choice": "PWA with IndexedDB and service worker",
+        "why": "Offline capability without app-store distribution"
+      },
+      {
+        "layer": "Database",
+        "choice": "PostgreSQL via Supabase",
+        "why": "RLS, SKIP LOCKED, JSONB, sequences - every primitive this design depends on"
+      },
+      {
+        "layer": "Real-time",
+        "choice": "Supabase Realtime",
+        "why": "Postgres-native; RLS applies to subscriptions automatically"
+      },
+      {
+        "layer": "Auth",
+        "choice": "Supabase Auth for staff, custom token flow for applicants",
+        "why": "Applicants must not need accounts"
+      },
+      {
+        "layer": "Storage",
+        "choice": "Supabase Storage or Cloudflare R2, private buckets",
+        "why": "Signed URLs for CVs"
+      },
+      {
+        "layer": "Email",
+        "choice": "Resend with delivery webhooks",
+        "why": "Already in the plan; good deliverability"
+      },
+      {
+        "layer": "Jobs",
+        "choice": "Postgres-backed queue (pg-boss) or Supabase cron",
+        "why": "Avoids adding Redis for a workload this size"
+      },
+      {
+        "layer": "Hosting",
+        "choice": "Vercel",
+        "why": "Preview deployments per PR; free at this scale"
+      },
+      {
+        "layer": "Monitoring",
+        "choice": "Sentry plus a status dashboard",
+        "why": "You need to know about errors DURING the event, not after"
+      },
+      {
+        "layer": "QR scanning",
+        "choice": "zxing-wasm with native BarcodeDetector where available",
+        "why": "Avoid heavy JS-only libraries - scan latency is the single biggest factor in desk throughput"
+      }
+    ],
+    "alternative": {
+      "stack": "NestJS + Postgres + Socket.IO + Redis + BullMQ",
+      "tradeoff": "Same architecture, more operational work. Only choose it if someone on the team will genuinely maintain it after they graduate - which is the real constraint in a student society, and worth being honest about."
+    }
+  },
+  "build_phases": [
+    {
+      "phase": 1,
+      "name": "Foundations",
+      "weeks": "1-2",
+      "contents": [
+        "Cycles, stages, departments",
+        "Users, roles, RLS",
+        "Audit log",
+        "Applicant ID generation",
+        "Online application form",
+        "Resend confirmation",
+        "Applicant status page"
+      ],
+      "ships": "You can accept applications",
+      "blocking_requirements": [
+        "FR-CYC-001..007",
+        "FR-CYC-012..013",
+        "FR-IDT-001..006",
+        "FR-REG-001..013",
+        "FR-RBAC-001..010",
+        "FR-AUD-001..003",
+        "DR-001..006"
+      ]
+    },
+    {
+      "phase": 2,
+      "name": "Event core",
+      "weeks": "3-4",
+      "contents": [
+        "Tokens and signed QR",
+        "Check-in for all three sources",
+        "Dedupe",
+        "Queue engine with pull/claim",
+        "Panels",
+        "Skip and park",
+        "Applicant live view",
+        "Display board"
+      ],
+      "ships": "YOU CAN RUN INTERVIEW DAY - the minimum viable induction",
+      "blocking_requirements": [
+        "FR-IDT-007..011",
+        "FR-CHK-001..018",
+        "FR-QUE-001..020",
+        "FR-OPS-009..010",
+        "NFR-PERF-001..005",
+        "NFR-AVAIL-002..005"
+      ]
+    },
+    {
+      "phase": 3,
+      "name": "Evaluation",
+      "weeks": "5",
+      "contents": [
+        "Rubrics with anchors",
+        "Interviewer screen",
+        "Evaluation submission and revision",
+        "Recusals",
+        "Panel completion gating",
+        "Waiver",
+        "Ops dashboard"
+      ],
+      "ships": "Structured scoring instead of spreadsheets",
+      "blocking_requirements": [
+        "FR-INT-001..020",
+        "FR-OPS-005..006"
+      ]
+    },
+    {
+      "phase": 4,
+      "name": "Decisions",
+      "weeks": "6",
+      "contents": [
+        "Shrinkage",
+        "Disagreement flagging",
+        "Review queue",
+        "Deferred-acceptance allocation",
+        "Dual-control lock",
+        "Dry run",
+        "Publication",
+        "Offers",
+        "Waitlist cascade"
+      ],
+      "ships": "End-to-end recruitment",
+      "blocking_requirements": [
+        "FR-SCR-001..014",
+        "FR-DEC-001..016",
+        "FR-OFF-001..006",
+        "FR-NOT-001..005"
+      ]
+    },
+    {
+      "phase": 5,
+      "name": "Resilience",
+      "weeks": "7",
+      "contents": [
+        "Offline PWA",
+        "Sync reconciliation",
+        "Bulk reconcile",
+        "Heartbeats",
+        "Failure drills"
+      ],
+      "ships": "Confidence",
+      "blocking_requirements": [
+        "FR-CHK-012..017",
+        "FR-INT-014..016",
+        "FR-OPS-003",
+        "NFR-AVAIL-006..008"
+      ]
+    },
+    {
+      "phase": 6,
+      "name": "Refinement",
+      "weeks": "8+",
+      "contents": [
+        "Time-slot booking",
+        "Capacity simulator",
+        "Analytics",
+        "Exports",
+        "SMS nudges"
+      ],
+      "ships": "Polish",
+      "blocking_requirements": [
+        "FR-REG-014",
+        "FR-OPS-007",
+        "FR-OFF-002",
+        "FR-OFF-006"
+      ]
+    }
+  ],
+  "phasing_guidance": {
+    "three_week_scenario": "Build Phases 1 and 2, run scoring on paper for one cycle, add Phases 3-4 before the next induction.",
+    "hard_rule": "Do NOT skip Phase 2's queue engine to build the scoring UI first. The queue is what makes the day survivable, and it is the one part you cannot improvise on the floor."
+  },
+  "testing": {
+    "strategy": [
+      {
+        "class": "State transitions",
+        "method": "Automated tests over the full transition matrix, including rejection of undefined transitions",
+        "gate": "every build"
+      },
+      {
+        "class": "Concurrency",
+        "method": "Load test at 20 concurrent actors asserting zero duplicate IDs and zero double assignments",
+        "gate": "pre-release, per cycle"
+      },
+      {
+        "class": "Offline",
+        "method": "Scripted network-partition test, 8-hour buffer, replay reconciliation assertion",
+        "gate": "pre-cycle"
+      },
+      {
+        "class": "Access control",
+        "method": "Automated per-role per-endpoint matrix test asserting 403 for every denied capability",
+        "gate": "every build"
+      },
+      {
+        "class": "Row-level policy",
+        "method": "Direct database test BYPASSING the API, asserting zero rows for unauthorised context",
+        "gate": "every build"
+      },
+      {
+        "class": "Scoring and allocation",
+        "method": "Golden-dataset tests with fixed expected output; determinism verified by repeated runs",
+        "gate": "every build"
+      },
+      {
+        "class": "Accessibility",
+        "method": "Automated axe scan plus manual keyboard and screen-reader pass",
+        "gate": "pre-release"
+      },
+      {
+        "class": "Performance",
+        "method": "Load test at the NFR-SCAL-001 profile",
+        "gate": "pre-cycle"
+      },
+      {
+        "class": "Usability",
+        "method": "Timed observation with three untrained participants",
+        "gate": "pre-cycle"
+      }
+    ],
+    "coverage_target": ">= 80 percent for state transition logic, queue claim path, scoring computation and allocation",
+    "critical_test_cases": [
+      "20 concurrent registrations produce 20 distinct IDs with no gaps from contention",
+      "20 concurrent Call Next requests produce 20 distinct applicants",
+      "Same QR scanned twice on two devices produces one check_in row",
+      "Recusal table containing a NULL does not suppress the queue",
+      "Allocation run twice over identical input produces byte-identical output",
+      "Interviewer A cannot SELECT interviewer B's evaluation via direct SQL with A's RLS context",
+      "Unset RLS context returns zero rows, never all rows",
+      "Same Super Admin cannot both lock and confirm",
+      "Offline check-in for 8 hours then reconnect yields 100 percent reconciliation, zero duplicates",
+      "Stage close blocked while an interview is in_progress",
+      "Panel cannot Call Next while awaiting_evaluations",
+      "Wait estimate rises with a stated cause when a panel closes"
+    ]
+  },
+  "risks": [
+    {
+      "id": "RSK-001",
+      "risk": "Network failure during peak check-in",
+      "likelihood": "high",
+      "impact": "high",
+      "mitigation": "Offline PWA (FR-CHK-012), paper fallback (FR-CHK-017)",
+      "residual": "low"
+    },
+    {
+      "id": "RSK-002",
+      "risk": "Interviewer capacity below applicant volume",
+      "likelihood": "high",
+      "impact": "high",
+      "mitigation": "Capacity model (FR-OPS-007), slot booking (FR-REG-014)",
+      "residual": "medium"
+    },
+    {
+      "id": "RSK-003",
+      "risk": "Evaluations not submitted by end of day",
+      "likelihood": "medium",
+      "impact": "high",
+      "mitigation": "Panel blocking (FR-INT-013), stage-close gate (FR-CYC-009)",
+      "residual": "low"
+    },
+    {
+      "id": "RSK-004",
+      "risk": "Volunteer error under pressure",
+      "likelihood": "medium",
+      "impact": "medium",
+      "mitigation": "Zero-tap success path (FR-CHK-002), non-error styling for expected conditions (NFR-USE-004)",
+      "residual": "low"
+    },
+    {
+      "id": "RSK-005",
+      "risk": "Disputed result",
+      "likelihood": "medium",
+      "impact": "high",
+      "mitigation": "Deterministic allocation (FR-DEC-007), append-only audit (FR-AUD-003), Auditor role (FR-RBAC-009)",
+      "residual": "low"
+    },
+    {
+      "id": "RSK-006",
+      "risk": "Device loss or theft during event",
+      "likelihood": "low",
+      "impact": "medium",
+      "mitigation": "No secrets on device (FR-IDT-007), roster contains hashes only (FR-CHK-018)",
+      "residual": "low"
+    },
+    {
+      "id": "RSK-007",
+      "risk": "Accidental early publication",
+      "likelihood": "low",
+      "impact": "high",
+      "mitigation": "Dual control (FR-DEC-010), dry run (FR-DEC-012), re-authentication (FR-DEC-015)",
+      "residual": "low"
+    },
+    {
+      "id": "RSK-008",
+      "risk": "Knowledge loss at committee handover",
+      "likelihood": "high",
+      "impact": "medium",
+      "mitigation": "Configuration over code (NFR-MAIN-001), documentation, versioned migrations",
+      "residual": "medium"
+    },
+    {
+      "id": "RSK-009",
+      "risk": "Interviewer bias",
+      "likelihood": "medium",
+      "impact": "medium",
+      "mitigation": "Blind evaluation (FR-INT-004), shrinkage (FR-SCR-002), disagreement flagging (FR-SCR-007), recusal (FR-INT-017)",
+      "residual": "medium"
+    },
+    {
+      "id": "RSK-010",
+      "risk": "Applicant PII exposure",
+      "likelihood": "low",
+      "impact": "high",
+      "mitigation": "Row-level policy (FR-RBAC-005), no names on display (NFR-PRIV-006), retention limit (NFR-PRIV-003)",
+      "residual": "low"
+    }
+  ],
+  "constraints": [
+    {
+      "id": "CON-001",
+      "constraint": "The system is maintained by student volunteers with turnover at graduation. Operational complexity is a first-order cost, not a secondary concern."
+    },
+    {
+      "id": "CON-002",
+      "constraint": "Campus network reliability cannot be assumed at any point during an event."
+    },
+    {
+      "id": "CON-003",
+      "constraint": "Volunteers receive at most 15 minutes of training, on the day."
+    },
+    {
+      "id": "CON-004",
+      "constraint": "No third-party service may sit in the synchronous path of check-in, queue claim or evaluation submission."
+    },
+    {
+      "id": "CON-005",
+      "constraint": "Budget assumes free or education-tier hosting; the architecture must remain within those limits at 1000 applicants."
+    },
+    {
+      "id": "CON-006",
+      "constraint": "Interviewer availability is the binding throughput constraint and is outside system control."
+    }
+  ],
+  "assumptions": [
+    {
+      "id": "ASM-001",
+      "assumption": "Applicants carry an internet-capable phone",
+      "if_false": "Manual search and printed slips already cover this; no change"
+    },
+    {
+      "id": "ASM-002",
+      "assumption": "One general interview round is sufficient",
+      "if_false": "Second-round UI required; schema already supports it via queue_entries.round"
+    },
+    {
+      "id": "ASM-003",
+      "assumption": "Panels comprise 2 interviewers",
+      "if_false": "Throughput model and capacity screen require recalibration"
+    },
+    {
+      "id": "ASM-004",
+      "assumption": "Departments have fixed capacities before allocation",
+      "if_false": "Allocation cannot run; FR-DEC-003 blocks it by design"
+    },
+    {
+      "id": "ASM-005",
+      "assumption": "Interview target duration is 12 minutes",
+      "if_false": "Wait estimate seed and capacity model require reconfiguration only"
+    },
+    {
+      "id": "ASM-006",
+      "assumption": "Venue has mains power for the display board and desks",
+      "if_false": "Paper fallback per FR-CHK-017"
+    }
+  ],
+  "open_issues": [
+    {
+      "id": "OI-1",
+      "issue": "Panel size: 1, 2 or 3 interviewers",
+      "default": 2,
+      "blocks_phase": 3,
+      "impact": "Drives throughput more than any other variable"
+    },
+    {
+      "id": "OI-2",
+      "issue": "One general interview, or one per department preference",
+      "default": "one general, department fit as a rubric criterion plus recommendation",
+      "blocks_phase": 2,
+      "impact": "Determines track configuration"
+    },
+    {
+      "id": "OI-3",
+      "issue": "Maximum ranked department preferences",
+      "default": 3,
+      "blocks_phase": 1,
+      "impact": "Form design"
+    },
+    {
+      "id": "OI-4",
+      "issue": "May an applicant be placed in more than one department",
+      "default": "no",
+      "blocks_phase": 4,
+      "impact": "Allocation semantics"
+    },
+    {
+      "id": "OI-5",
+      "issue": "Is a second interview round required",
+      "default": "no",
+      "blocks_phase": 3,
+      "impact": "UI scope; schema already supports it"
+    },
+    {
+      "id": "OI-6",
+      "issue": "Publication: individual notices only, or also a public list of selected identifiers",
+      "default": "individual only",
+      "blocks_phase": 4,
+      "impact": "Privacy decision for the committee"
+    },
+    {
+      "id": "OI-7",
+      "issue": "Offer expiry period",
+      "default": "5 days",
+      "blocks_phase": 4,
+      "impact": "Cascade timing"
+    },
+    {
+      "id": "OI-8",
+      "issue": "Adopt booked arrival windows",
+      "default": "recommended, not assumed",
+      "blocks_phase": 6,
+      "impact": "Changes the Phase 1 form"
+    },
+    {
+      "id": "OI-9",
+      "issue": "Target interview duration",
+      "default": "12 minutes",
+      "blocks_phase": 2,
+      "impact": "Seeds wait estimation and the capacity model"
+    },
+    {
+      "id": "OI-10",
+      "issue": "Waiver authority: Coordinator or Super Admin",
+      "default": "Coordinator, audited",
+      "blocks_phase": 3,
+      "impact": "Permission matrix"
+    },
+    {
+      "id": "OI-11",
+      "issue": "Confirmed hosting tier and data residency",
+      "default": "not determined",
+      "blocks_phase": 1,
+      "impact": "Affects NFR-SEC-002 and NFR-PRIV-003 feasibility"
+    },
+    {
+      "id": "OI-12",
+      "issue": "Whether faculty approval is required for the data retention policy",
+      "default": "assumed yes",
+      "blocks_phase": 1,
+      "impact": "Baseline approval"
+    }
+  ],
+  "pre_event_checklist": [
+    "Cycle stages configured with correct times; interview stage NOT yet active",
+    "Departments, capacities and rubric versions confirmed and locked",
+    "All interviewers have logged in at least once and completed TOTP setup",
+    "Panels created, rooms mapped, panel-track assignments verified",
+    "Capacity model run - throughput versus applicant count is feasible",
+    "Check-in devices charged, roster synced, offline mode tested by disabling WiFi",
+    "Printed roster produced, sorted by ID and by surname",
+    "Display board tested on the actual hall TV at the actual resolution",
+    "Email templates previewed; a test send received and read on a phone",
+    "Backup restore tested within the last 7 days",
+    "Coordinator identified and reachable; escalation path written on the desk",
+    "Spare device available and logged in",
+    "Dry run: register a fake applicant, check in, interview, score, complete, delete"
+  ],
+  "figma_artifacts": {
+    "v2_corrected": [
+      {
+        "board": "v2-01",
+        "name": "Token Verification and Check-in",
+        "corrects": [
+          "E1"
+        ]
+      },
+      {
+        "board": "v2-02",
+        "name": "Registration and Dedupe Override",
+        "corrects": [
+          "E4",
+          "E6"
+        ]
+      },
+      {
+        "board": "v2-03",
+        "name": "State Ownership Rule",
+        "corrects": [
+          "E5"
+        ]
+      },
+      {
+        "board": "v2-04",
+        "name": "Queue Claim with NOT EXISTS",
+        "corrects": [
+          "E7",
+          "E10"
+        ]
+      },
+      {
+        "board": "v2-05",
+        "name": "Wait Estimate and Honest Display",
+        "corrects": [
+          "E11"
+        ]
+      },
+      {
+        "board": "v2-06",
+        "name": "Scoring Shrinkage and Review Bands",
+        "corrects": [
+          "E2",
+          "E3"
+        ]
+      },
+      {
+        "board": "v2-07",
+        "name": "Deterministic Allocation",
+        "corrects": [
+          "E8"
+        ]
+      },
+      {
+        "board": "v2-08",
+        "name": "Stage Close Gate",
+        "corrects": [
+          "E15"
+        ]
+      },
+      {
+        "board": "v2-09",
+        "name": "Permission Gate, Role Union and Fail-Closed RLS",
+        "corrects": [
+          "E9",
+          "E13"
+        ]
+      },
+      {
+        "board": "v2-10",
+        "name": "Applicant State Machine, owners annotated",
+        "corrects": [
+          "E5"
+        ]
+      },
+      {
+        "board": "v2-11",
+        "name": "Data Model with State Owners",
+        "corrects": [
+          "E4",
+          "E10"
+        ]
+      }
+    ],
+    "v1_still_valid": [
+      {
+        "board": "01",
+        "name": "Master Applicant Journey"
+      },
+      {
+        "board": "09",
+        "name": "Interview and Evaluation Flow"
+      },
+      {
+        "board": "13",
+        "name": "Offer Response and Waitlist Cascade"
+      },
+      {
+        "board": "14",
+        "name": "Real-time Degradation Ladder"
+      }
+    ],
+    "v1_obsolete_archive_these": [
+      "04 Registration and Duplicate Detection",
+      "05 Check-in Decision Flow",
+      "06 Offline Check-in and Sync",
+      "07 Queue Claim Sequence",
+      "10 Scoring and Normalisation Pipeline",
+      "11 Department Allocation",
+      "15 Permission and Request Gate",
+      "16 Data Model ER Diagram"
+    ],
+    "known_quirk": "v2-11 contains a deliberate loop DECISIONS to OFFERS to DECISIONS. This represents the waitlist cascade creating a new decision version when an offer lapses. It is real, not a modelling slip, but it reads oddly cold."
+  },
+  "decisions_changed_from_user_original": [
+    {
+      "topic": "Applicant ID format",
+      "user_proposed": "SP26-0001 where SP = SOPHEP",
+      "changed_to": "SPH-SP26-0001",
+      "reason": "Spring 2026 and Fall 2026 produced identical prefixes; two cycles in one year collided semantically"
+    },
+    {
+      "topic": "ID generation",
+      "user_proposed": "Auto increment",
+      "changed_to": "In-transaction per-cycle counter",
+      "reason": "Two registration desks using SELECT MAX+1 WILL produce duplicates - the most common bug in systems like this"
+    },
+    {
+      "topic": "QR distribution",
+      "user_proposed": "QR only for online applicants",
+      "changed_to": "Every applicant gets a token; QR is one rendering of it",
+      "reason": "Two divergent check-in paths and a second-class experience for walk-ins; volunteers must remember which flow applies"
+    },
+    {
+      "topic": "QR contents",
+      "user_proposed": "A secure unique token",
+      "changed_to": "Full HTTPS URL with an Ed25519 signature",
+      "reason": "Correct instinct, but a bare token requires a custom scanner. A URL means any phone camera works as a fallback, and asymmetric signing enables safe offline verification"
+    },
+    {
+      "topic": "Room assignment",
+      "user_proposed": "System assigns applicants to rooms",
+      "changed_to": "Pull model - panels claim when free",
+      "reason": "Push assignment goes stale the moment one interview runs long; the applicant is told Room 2 while Room 2 is 20 minutes behind"
+    },
+    {
+      "topic": "Queue structure",
+      "user_proposed": "One queue",
+      "changed_to": "Per-track queues",
+      "reason": "A single queue routes people to panels that cannot evaluate them while specialist interviewers sit idle"
+    },
+    {
+      "topic": "Wait estimate",
+      "user_proposed": "Estimated wait, no algorithm specified",
+      "changed_to": "EWMA over active panels, displayed as a range with honest upward revision",
+      "reason": "A naive estimate that jumps around destroys trust faster than showing nothing"
+    },
+    {
+      "topic": "Scoring",
+      "user_proposed": "Average, highest, lowest score",
+      "changed_to": "Shrinkage-corrected scores plus disagreement flagging",
+      "reason": "Raw averaging silently rewards applicants who drew lenient interviewers"
+    },
+    {
+      "topic": "Process scope",
+      "user_proposed": "Flow ends at scoring",
+      "changed_to": "Full decision pipeline through allocation, offers and waitlist",
+      "reason": "The hardest part was missing - turning scores into placements under capacity constraints"
+    },
+    {
+      "topic": "Real-time",
+      "user_proposed": "Real-time everywhere as a foundation",
+      "changed_to": "Real-time as an enhancement layer over an offline-capable core",
+      "reason": "If the socket drops, the event must continue"
+    },
+    {
+      "topic": "Roles",
+      "user_proposed": "Super Admin, Admin, Volunteer, Interviewer",
+      "changed_to": "Added Coordinator and Auditor; dual control on publication",
+      "reason": "No floor manager, no read-only auditor, and one person could unilaterally publish results"
+    }
+  ]
+}
