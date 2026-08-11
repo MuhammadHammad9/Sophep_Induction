@@ -16,6 +16,7 @@
 import { notFound } from 'next/navigation'
 import { hashToken, withContext } from '@sophep/backend'
 import { StatusBand, type UiState } from '@/components/state/StateBadge'
+import { LiveStatus } from './LiveStatus'
 
 export const dynamic = 'force-dynamic'
 
@@ -105,6 +106,27 @@ export default async function StatusPage({ params }: { params: Promise<{ token: 
     guidance: 'Your status page will update automatically.',
   }
 
+  // Pre-event states render statically — there is no queue to poll and nothing that changes
+  // second to second, so a polling loop would be noise.
+  const preEvent = ['submitted', 'eligible', 'screened_out', 'withdrawn'].includes(status.state)
+
+  if (!preEvent) {
+    return (
+      <LiveStatus
+        token={token}
+        initial={{
+          state: status.state,
+          displayId: status.displayId,
+          position: null,
+          roomName: null,
+          estimate: { kind: 'suppressed', message: '' },
+          graceExpiresAt: null,
+          graceExtended: false,
+        }}
+      />
+    )
+  }
+
   return (
     <div className="mx-auto flex min-h-dvh max-w-md flex-col gap-5 p-5">
       {/* 1. ID chip — mono, always visible, top of screen (§19.1) */}
@@ -118,19 +140,16 @@ export default async function StatusPage({ params }: { params: Promise<{ token: 
       {/* 2. Status band — full width, state-coloured, icon + one line */}
       <StatusBand state={view.state} headline={view.headline} />
 
-      {/* 3+4. "The one number" lands here in Phase 2: queue position, or the room number when
-          called. Until a queue exists there is genuinely no number to show, and inventing one
-          would violate the honesty principle this design is built on. */}
+      {/* 3+4. No "one number" before the event: there is genuinely no position to show, and
+          inventing one would violate the honesty principle this design is built on. */}
 
       {/* 5. Guidance — one sentence, plain language */}
       <p className="text-body">{view.guidance}</p>
 
       <div className="mt-auto space-y-1 border-t border-border pt-4">
         <p className="text-small text-text-muted">{status.fullName}</p>
-        {/* 6. Liveness. Phase 1 is a static render, so it says so. Presenting a static page as
-            live would be exactly the lie principle 2 exists to prevent. */}
         <p className="text-caption text-text-muted">
-          Updated just now · live updates begin on interview day
+          Live updates begin when you check in on interview day
         </p>
       </div>
     </div>
