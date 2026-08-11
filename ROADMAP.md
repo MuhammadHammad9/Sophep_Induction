@@ -123,11 +123,11 @@ exists to look at it.
 
 | # | Stage | Contains | Proven by |
 |---|---|---|---|
-| **2A** | Event schema | stages, check_ins, panels, panel_members, panel_tracks, queue_entries, recusals, interviews · Ed25519 keypair per cycle | Migrations apply; RLS fail-closed extends to every new table |
-| **2B** | **Queue engine** | `fn_claim_next` with `SKIP LOCKED` + `NOT EXISTS`; priority tiers; grace/skip/park; `fn_queue_transition` as state owner | **20 concurrent Call Next → 20 distinct applicants**; a NULL in `recusals` does not stall the queue |
-| **2C** | Identity & check-in | Ed25519 sign/verify; four-layer verification; `fn_check_in` idempotent, one per stage | Same QR on two devices → one `check_ins` row; a prior cycle's token fails |
-| **2D** | Staff auth | Supabase Auth, session→membership binding, TOTP for Coordinator/Admin/Super Admin, per-endpoint 403 matrix | The endpoint matrix deferred from Phase 1 |
-| **2E** | Surfaces | Scanner PWA, panel screen, applicant live status, public display board, realtime + degradation ladder | Full dry run: register → check in → call → grace → skip → park → reactivate |
+| ✅ **2A** | Event schema | stages, check_ins, panels, panel_members, panel_tracks, queue_entries, recusals, interviews · Ed25519 keypair per cycle | Migrations apply; RLS fail-closed extends to every new table |
+| ✅ **2B** | **Queue engine** | `fn_claim_next` with `SKIP LOCKED` + `NOT EXISTS`; priority tiers; grace/skip/park; `fn_queue_transition` as state owner | **20 concurrent Call Next → 20 distinct applicants**; a NULL in `recusals` does not stall the queue |
+| ⬜ **2C** | Identity & check-in | Ed25519 sign/verify; four-layer verification; `fn_check_in` idempotent, one per stage | Same QR on two devices → one `check_ins` row; a prior cycle's token fails |
+| ⬜ **2D** | Staff auth | Supabase Auth, session→membership binding, TOTP for Coordinator/Admin/Super Admin, per-endpoint 403 matrix | The endpoint matrix deferred from Phase 1 |
+| ⬜ **2E** | Surfaces | Scanner PWA, panel screen, applicant live status, public display board, realtime + degradation ladder | Full dry run: register → check in → call → grace → skip → park → reactivate |
 
 **2B before 2C is deliberate.** Check-in is the visible part and the tempting place to start,
 but it only feeds the queue. If the claim semantics are wrong, every screen built on top has
@@ -160,14 +160,15 @@ to be reworked — and `SKIP LOCKED` is the one thing in this system that cannot
 - [ ] One check-in per applicant per stage, enforced by DB constraint
 - [ ] Idempotency-Key on every mutation (`R-051`)
 
-**Queue engine**
-- [ ] Pull-based claim, `FOR UPDATE SKIP LOCKED` + `NOT EXISTS` recusals (`R-013`)
-- [ ] Priority tiers 100/50/30/10/5; tier 50 granted by Coordinator only (no public booking)
-- [ ] Coordinator priority override with mandatory reason, audited
-- [ ] Grace window 5 min; one-time "I'm on my way" +2 min
-- [ ] Skip → requeue at priority 30, `enqueued_at = now − 10 min` → park on second skip
-- [ ] Parked count visible to panels; volunteers alerted when `waiting` empty but `parked` is not
-- [ ] Withdrawal deletes the queue entry in the **same transaction** as the state change
+**Queue engine** — migrations `0015`–`0017`, ✅ verified
+- [x] Pull-based claim, `FOR UPDATE SKIP LOCKED` + `NOT EXISTS` recusals (`R-013`)
+- [x] Priority tiers 100/50/30/10/5; tier 50 granted by Coordinator only (no public booking)
+- [x] Coordinator priority override with mandatory reason, audited
+- [x] Grace window 5 min; one-time "I'm on my way" +2 min
+- [x] Skip → requeue at priority 30, `enqueued_at = now − 10 min` → park on second skip
+- [x] Withdrawal deletes the queue entry in the **same transaction** as the state change
+- [x] `fn_queue_transition` as sole owner of event-day `applicants.state` (E5)
+- [ ] Parked count surfaced to panels + volunteer alert — needs the panel screen (2E)
 
 **Wait estimation** — retuned for variable 10–30 min interviews
 - [ ] EWMA seed **20 min**, smoothing **0.2**, range **−30%/+50%** — all cycle config
