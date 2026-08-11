@@ -92,29 +92,28 @@ export async function enqueue(tx: Tx, req: NotificationRequest): Promise<string>
   if (!template) {
     throw new Error(`unknown notification template "${req.templateKey}"`)
   }
+  if (!req.applicantId) {
+    throw new Error('enqueue requires an applicantId — the recipient is derived from it')
+  }
 
   const rendered = template.render(req.variables)
 
-  const rows = await tx<Array<{ id: string }>>`
-    INSERT INTO notifications (
-      cycle_id, applicant_id, user_id, template_key, template_version,
-      to_email, subject, body_html, body_text, state
-    ) VALUES (
-      ${req.cycleId}::uuid,
-      ${req.applicantId ?? null}::uuid,
-      ${req.userId ?? null}::uuid,
+  // Note what is NOT passed: the recipient address. fn_enqueue_notification reads it from the
+  // applicant record, so a caller can never redirect a message to an address of their
+  // choosing. Without that, the unauthenticated application form would be an open mail relay
+  // sending from the society's verified domain (migration 0014).
+  const rows = await tx<Array<{ fn_enqueue_notification: string }>>`
+    SELECT fn_enqueue_notification(
+      ${req.applicantId}::uuid,
       ${req.templateKey},
-      ${template.version},
-      ${req.toEmail},
+      ${template.version}::smallint,
       ${rendered.subject},
       ${rendered.html},
-      ${rendered.text},
-      'pending'
+      ${rendered.text}
     )
-    RETURNING id
   `
 
-  const id = rows[0]?.id
+  const id = rows[0]?.fn_enqueue_notification
   if (!id) throw new Error('failed to enqueue notification')
   return id
 }

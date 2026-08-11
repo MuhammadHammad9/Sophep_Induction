@@ -13,16 +13,10 @@ import { resolve } from 'node:path'
  * credential (rules.md R-056).
  */
 function loadRootEnv(): void {
-  // NOTE the order: `.env` is read FIRST and wins, which is the opposite of the Next.js
-  // convention where `.env.local` overrides `.env`.
-  //
-  // This is deliberate and temporary. The repo currently contains two .env files holding
-  // DIFFERENT database passwords, and the one in `.env.local` does not authenticate. Reading
-  // `.env` first keeps the suite runnable, but it papers over a real problem: the Next.js dev
-  // server applies the opposite precedence, so the app will fail to connect even while tests
-  // pass. Reconcile the two files (delete `.env.local`, or correct its password) and then
-  // restore the conventional order here.
-  for (const name of ['.env', '.env.local']) {
+  // `.env.local` first, matching the Next.js convention where it overrides `.env`. Keeping the
+  // same precedence as the dev server matters: if the two files ever drift again, the tests
+  // and the running app must fail together rather than one silently passing.
+  for (const name of ['.env.local', '.env']) {
     const path = resolve(import.meta.dirname, '..', name)
     if (!existsSync(path)) continue
 

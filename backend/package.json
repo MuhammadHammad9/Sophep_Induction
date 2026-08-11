@@ -15,10 +15,11 @@
     "test:rls": "vitest run tests/rls",
     "test:concurrency": "vitest run tests/concurrency",
     "test:golden": "vitest run tests/golden",
-    "db:migrate": "supabase db push",
+    "db:migrate": "node --env-file=../.env scripts/migrate.mjs",
     "db:reset": "supabase db reset",
-    "db:seed": "supabase db reset --no-seed && node scripts/seed.mjs",
-    "db:diff": "supabase db diff -f"
+    "db:seed": "node --env-file=../.env scripts/seed.mjs",
+    "db:diff": "supabase db diff -f",
+    "db:reset-test": "node --env-file=../.env scripts/reset-test-db.mjs"
   },
   "dependencies": {
     "@noble/ed25519": "^2.2.3",
