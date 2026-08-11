@@ -12,7 +12,7 @@ import { withContext, callNext, RmsError } from '@sophep/backend'
 import { requireStaff, hasCapability, unauthorized, forbidden } from '@/lib/auth/session'
 
 export async function POST(req: Request, ctx: { params: Promise<{ id: string }> }) {
-  const staff = await requireStaff(req)
+  const staff = await requireStaff()
   if (!staff) return unauthorized()
 
   if (!(await hasCapability(staff, 'queue.call_next'))) {

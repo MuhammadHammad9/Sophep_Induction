@@ -11,7 +11,7 @@ import { withContext, getPanelSnapshot } from '@sophep/backend'
 import { requireStaff, unauthorized } from '@/lib/auth/session'
 
 export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }) {
-  const staff = await requireStaff(req)
+  const staff = await requireStaff()
   if (!staff) return unauthorized()
 
   const { id: panelId } = await ctx.params

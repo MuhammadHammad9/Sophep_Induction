@@ -34,9 +34,15 @@ export interface StaffSession {
 export async function supabaseServer() {
   const cookieStore = await cookies()
 
+  const url = process.env['NEXT_PUBLIC_SUPABASE_URL']
+  const key = process.env['NEXT_PUBLIC_SUPABASE_ANON_KEY']
+  if (!url || !key) {
+    throw new Error('Missing Supabase environment variables: NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY must be set')
+  }
+
   return createServerClient(
-    process.env['NEXT_PUBLIC_SUPABASE_URL']!,
-    process.env['NEXT_PUBLIC_SUPABASE_ANON_KEY']!,
+    url,
+    key,
     {
       cookies: {
         getAll: () => cookieStore.getAll(),
@@ -62,7 +68,7 @@ export async function supabaseServer() {
  * authenticated but holds no membership in this cycle is NOT staff here — role assignment is
  * cycle-scoped (FR-RBAC-002), and last year's volunteer is not this year's.
  */
-export async function requireStaff(_req: Request): Promise<StaffSession | null> {
+export async function requireStaff(): Promise<StaffSession | null> {
   const supabase = await supabaseServer()
   const {
     data: { user },
@@ -74,11 +80,12 @@ export async function requireStaff(_req: Request): Promise<StaffSession | null> 
   // deliberately separate: `users` predates auth and carries the cycle-scoped roles.
   const email = user.email
 
-  type MembershipRow = { user_id: string; cycle_id: string; role: string }
+  type MembershipRow = { user_id: string; cycle_id: string; role: string; caps: string[] }
 
   const rows = await withContext({}, (tx) =>
     tx<MembershipRow[]>`
-      SELECT u.id AS user_id, m.cycle_id, m.role
+      SELECT u.id AS user_id, m.cycle_id, m.role,
+             (SELECT array_agg(capability) FROM role_capabilities rc WHERE rc.role = m.role) as caps
         FROM users u
         JOIN memberships m ON m.user_id = u.id AND m.revoked_at IS NULL
         JOIN cycles c ON c.id = m.cycle_id
@@ -96,7 +103,9 @@ export async function requireStaff(_req: Request): Promise<StaffSession | null> 
 
   // E13: capabilities are the UNION across every role held in this cycle. A Coordinator who
   // also interviews is normal, and v1's gate would have silently denied the second role.
-  const roles = rows.filter((r) => r.cycle_id === cycleId).map((r) => r.role)
+  const activeRows = rows.filter((r) => r.cycle_id === cycleId)
+  const roles = activeRows.map((r) => r.role)
+  const capabilities = Array.from(new Set(activeRows.flatMap((r) => r.caps || []))).join(',')
 
   return {
     userId,
@@ -108,6 +117,7 @@ export async function requireStaff(_req: Request): Promise<StaffSession | null> 
       // Recorded on every audit row so "which hat were they wearing" is answerable later.
       actorRole: roles[0] ?? 'volunteer',
       actorLabel: email,
+      capabilities,
     },
   }
 }

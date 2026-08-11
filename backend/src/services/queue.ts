@@ -214,13 +214,14 @@ export async function queuePosition(tx: Tx, queueEntryId: string): Promise<numbe
       SELECT track_id, priority, enqueued_at, state
         FROM queue_entries WHERE id = ${queueEntryId}::uuid
     )
-    SELECT count(*) + 1 AS position
-      FROM queue_entries q, me
-     WHERE q.track_id = me.track_id
-       AND q.state = 'waiting'
-       AND me.state = 'waiting'
-       AND (q.priority > me.priority
-            OR (q.priority = me.priority AND q.enqueued_at < me.enqueued_at))
+    SELECT (SELECT count(*) + 1
+              FROM queue_entries q
+             WHERE q.track_id = me.track_id
+               AND q.state = 'waiting'
+               AND (q.priority > me.priority
+                    OR (q.priority = me.priority AND q.enqueued_at < me.enqueued_at))) AS position
+      FROM me
+     WHERE me.state = 'waiting'
   `
   return row ? Number(row.position) : null
 }

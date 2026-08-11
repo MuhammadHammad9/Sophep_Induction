@@ -18,24 +18,48 @@ import { tokenHashB64, type RosterBundle } from '../domain/verification'
 // ── Cycle keys ──────────────────────────────────────────────────────────────────────────
 
 /**
+ * The public key is STORED as a JWK (`cycles.qr_public_key_jwk`) but USED as raw 32 bytes.
+ *
+ * These two helpers are the only place that conversion happens, so the rest of the system
+ * deals in one representation. Raw is what the roster bundle ships — 44 base64url characters
+ * against JWK's ~110 — and what the crypto layer consumes without parsing. NFR-PERF-009
+ * budgets 100 KB for 500 applicants, so the difference is not cosmetic.
+ */
+export type PublicKeyJwk = Record<string, string | undefined> & {
+  kty?: string
+  crv?: string
+  x?: string
+}
+
+function jwkToRawPublicKey(jwk: PublicKeyJwk | null): Buffer | null {
+  if (!jwk?.x) return null
+  return Buffer.from(jwk.x, 'base64url')
+}
+
+function rawPublicKeyToJwk(raw: Buffer): PublicKeyJwk {
+  return { kty: 'OKP', crv: 'Ed25519', x: raw.toString('base64url') }
+}
+
+/**
  * Create the cycle's Ed25519 keypair if it does not have one.
  *
  * FR-IDT-011: one keypair per cycle, so a token from a previous cycle fails verification
  * against the current one. Without that, a Fall QR would still scan in Spring and check
  * someone in to an induction they never applied to.
  */
-export async function ensureCycleKeypair(tx: Tx, cycleId: string): Promise<object> {
-  const rows = await tx<Array<{ qr_public_key_jwk: object | null }>>`
+export async function ensureCycleKeypair(tx: Tx, cycleId: string): Promise<Buffer> {
+  const rows = await tx<Array<{ qr_public_key_jwk: PublicKeyJwk | null }>>`
     SELECT qr_public_key_jwk FROM cycles WHERE id = ${cycleId}::uuid
   `
-  const existing = rows[0]?.qr_public_key_jwk
+  const existing = jwkToRawPublicKey(rows[0]?.qr_public_key_jwk ?? null)
   if (existing) return existing
 
   const keypair = generateCycleKeypair(encryptionKeyFromEnv())
+  const jwk = rawPublicKeyToJwk(keypair.publicKey)
 
   await tx`
     UPDATE cycles
-       SET qr_public_key_jwk  = ${keypair.publicKeyJwk as any}::jsonb,
+       SET qr_public_key_jwk  = ${tx.json(jwk)}::jsonb,
            qr_private_key_enc = ${keypair.privateKeyEncrypted}::bytea
      WHERE id = ${cycleId}::uuid
   `
@@ -44,10 +68,10 @@ export async function ensureCycleKeypair(tx: Tx, cycleId: string): Promise<objec
   // response body (rules.md R-021, NFR-MAIN-006).
   await tx`
     SELECT fn_audit(${cycleId}::uuid, 'cycle.keypair_generated', 'cycle', ${cycleId}::uuid,
-                    NULL, ${tx.json({ public_key_jwk: keypair.publicKeyJwk })}::jsonb, NULL)
+                    NULL, ${tx.json({ public_key_jwk: jwk })}::jsonb, NULL)
   `
 
-  return keypair.publicKeyJwk
+  return keypair.publicKey
 }
 
 /**
@@ -83,10 +107,11 @@ export async function buildRosterBundle(
   cycleId: string,
   stageId: string,
 ): Promise<RosterBundle> {
-  const [cycle] = await tx<Array<{ qr_public_key_jwk: object | null }>>`
+  const [cycle] = await tx<Array<{ qr_public_key_jwk: PublicKeyJwk | null }>>`
     SELECT qr_public_key_jwk FROM cycles WHERE id = ${cycleId}::uuid
   `
-  if (!cycle?.qr_public_key_jwk) {
+  const rawPublic = jwkToRawPublicKey(cycle?.qr_public_key_jwk ?? null)
+  if (!rawPublic) {
     throw new Error(`cycle ${cycleId} has no public key`)
   }
 
@@ -104,7 +129,7 @@ export async function buildRosterBundle(
     tokenHashes: rows.map((r) =>
       Buffer.from(r.token_hash_b64, 'base64').toString('base64url'),
     ),
-    publicKey: cycle.qr_public_key_jwk,
+    publicKey: rawPublic.toString('base64url'),
     generatedAt: new Date().toISOString(),
   }
 }

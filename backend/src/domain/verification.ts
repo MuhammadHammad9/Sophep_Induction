@@ -49,8 +49,8 @@ export interface RosterBundle {
   stageId: string
   /** base64url sha256(token) — a SET, so membership is O(1) on a device holding 500 entries. */
   tokenHashes: string[]
-  /** JWK object for Ed25519 public key. */
-  publicKey: any
+  /** base64url raw Ed25519 public key. */
+  publicKey: string
   generatedAt: string
 }
 
@@ -72,7 +72,7 @@ export function tokenHashHex(rawToken: string): string {
 export function verifyOffline(
   scanned: string,
   roster: ReadonlySet<string>,
-  publicKey: any | null,
+  publicKey: Buffer | Uint8Array | null,
 ): VerificationOutcome {
   // ── Layer 1: format ───────────────────────────────────────────────────────────────────
   const parsed = parseQrPayload(scanned)

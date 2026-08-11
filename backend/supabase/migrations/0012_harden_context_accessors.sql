@@ -100,6 +100,15 @@ DECLARE
   v_role role_name;
   v_ip   inet;
 BEGIN
+  -- Both casts are wrapped, and the exception handlers are NOT optional.
+  --
+  -- app.client_ip is derived from the X-Forwarded-For header, which is attacker-controlled. A
+  -- bare `::inet` cast on a malformed value RAISES, and because fn_audit runs inside the
+  -- transaction it is auditing, that would roll back the write it was recording — turning any
+  -- request with a junk XFF header into a failed check-in, registration or evaluation.
+  --
+  -- app.actor_role has the same shape of risk against the role_name enum. A malformed context
+  -- must be treated as ABSENT, never as an error.
   BEGIN
     v_role := nullif(current_setting('app.actor_role', true), '')::role_name;
   EXCEPTION WHEN others THEN

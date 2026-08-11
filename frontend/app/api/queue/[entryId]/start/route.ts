@@ -12,7 +12,7 @@ import { withContext, startInterview, RmsError } from '@sophep/backend'
 import { requireStaff, unauthorized } from '@/lib/auth/session'
 
 export async function POST(req: Request, ctx: { params: Promise<{ entryId: string }> }) {
-  const staff = await requireStaff(req)
+  const staff = await requireStaff()
   if (!staff) return unauthorized()
 
   const { entryId } = await ctx.params

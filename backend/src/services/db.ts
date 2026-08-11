@@ -75,6 +75,8 @@ export interface SecurityContext {
   actorRole?: string
   actorLabel?: string
   clientIp?: string
+  /** Comma-separated list of capabilities to avoid RLS subquery overhead (M-07). */
+  capabilities?: string
 }
 
 /**
@@ -100,6 +102,7 @@ export async function withContext<T>(
     await tx`SELECT set_config('app.actor_role',   ${ctx.actorRole ?? ''},   true)`
     await tx`SELECT set_config('app.actor_label',  ${ctx.actorLabel ?? ''},  true)`
     await tx`SELECT set_config('app.client_ip',    ${ctx.clientIp ?? ''},    true)`
+    await tx`SELECT set_config('app.capabilities', ${ctx.capabilities ?? ''},true)`
 
     return fn(tx as Tx)
   }) as Promise<T>

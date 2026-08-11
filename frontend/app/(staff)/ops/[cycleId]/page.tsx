@@ -73,7 +73,7 @@ export default async function OpsDashboard({
 }) {
   const { cycleId } = await params
 
-  const staff = await requireStaff(new Request('http://internal/ops'))
+  const staff = await requireStaff()
   if (!staff) redirect('/staff/sign-in')
 
   const { actions, kpis } = await withContext(staff.context, async (tx) => {

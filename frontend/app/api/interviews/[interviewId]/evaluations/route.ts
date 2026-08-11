@@ -22,7 +22,7 @@ const bodySchema = z.object({
 })
 
 export async function POST(req: Request, ctx: { params: Promise<{ interviewId: string }> }) {
-  const staff = await requireStaff(req)
+  const staff = await requireStaff()
   if (!staff) return unauthorized()
 
   if (!(await hasCapability(staff, 'evaluation.submit'))) {

@@ -44,9 +44,10 @@ BEGIN
       outcome := v_rec.outcome;
       queue_position := v_rec.queue_position;
       RETURN NEXT;
-    EXCEPTION WHEN OTHERS THEN
-      -- In a bulk operation, one failure must not abort the rest.
-      -- We return the error as the outcome.
+    EXCEPTION WHEN raise_exception OR unique_violation OR check_violation OR foreign_key_violation THEN
+      -- In a bulk operation, one domain-level failure must not abort the rest.
+      -- We return the error as the outcome. Catching specific classes prevents
+      -- swallowing fatal errors (OOM, connection loss).
       applicant_id := v_id;
       outcome := 'error: ' || SQLERRM;
       queue_position := NULL;

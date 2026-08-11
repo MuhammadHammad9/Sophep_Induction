@@ -20,7 +20,7 @@ export default async function CheckInPage({
 }) {
   const { stageId } = await params
 
-  const staff = await requireStaff(new Request('http://internal/checkin'))
+  const staff = await requireStaff()
   if (!staff) redirect('/staff/sign-in')
 
   const stage = await withContext(staff.context, async (tx) => {

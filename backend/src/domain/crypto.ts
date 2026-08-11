@@ -29,8 +29,6 @@
 import {
   generateKeyPairSync,
   sign as nodeSign,
-  verify as nodeVerify,
-  createPublicKey,
   createPrivateKey,
   randomBytes,
   createCipheriv,
@@ -38,12 +36,38 @@ import {
   type KeyObject,
 } from 'node:crypto'
 import * as ed from '@noble/ed25519'
+import { sha512 } from '@noble/hashes/sha2.js'
+
+/**
+ * WHY BOTH node:crypto AND @noble/ed25519.
+ *
+ * Key generation and signing are SERVER ONLY (rules.md R-021), so they use node:crypto — it is
+ * native, fast, and needs no configuration.
+ *
+ * Verification has to run in a VOLUNTEER'S BROWSER, offline, where node:crypto does not exist
+ * and WebCrypto's Ed25519 support is still uneven across the iOS and Android versions
+ * NFR-COMP-001 requires. So verification goes through noble, which is pure JavaScript and runs
+ * identically on the server and on a phone — meaning the API and the PWA cannot disagree about
+ * whether a code is valid.
+ *
+ * noble v2 ships no hash of its own and MUST be given one. Without this wiring every
+ * verification throws "sha512Sync not set" — and it would throw at a check-in desk, offline,
+ * with a queue waiting.
+ */
+ed.etc.sha512Sync = (...messages: Uint8Array[]) => sha512(ed.etc.concatBytes(...messages))
+ed.etc.sha512Async = async (...messages: Uint8Array[]) =>
+  sha512(ed.etc.concatBytes(...messages))
 
 // ── Key material ────────────────────────────────────────────────────────────────────────
 
 export interface CycleKeypair {
-  /** JWK object for Ed25519 public key. Safe to ship to any device. */
-  publicKeyJwk: object
+  /**
+   * Raw 32-byte Ed25519 public key. Safe to ship to any device.
+   *
+   * Raw rather than JWK: it is what goes in the roster bundle, where NFR-PERF-009 allows
+   * 100 KB for 500 applicants, and both libraries consume it directly without parsing.
+   */
+  publicKey: Buffer
   /** Raw 32-byte Ed25519 seed, encrypted at the application layer. NEVER leaves the server. */
   privateKeyEncrypted: Buffer
 }
@@ -59,17 +83,15 @@ export interface CycleKeypair {
 export function generateCycleKeypair(encryptionKey: Buffer): CycleKeypair {
   const { publicKey, privateKey } = generateKeyPairSync('ed25519')
 
-  // Export the JWK. The public key is shipped to every device in
-  // the offline roster bundle, which has a 100 KB budget for 500 applicants (NFR-PERF-009).
-  const jwkPublic = publicKey.export({ format: 'jwk' })
-  const rawPrivate = privateKey.export({ format: 'jwk' }).d
-  if (!jwkPublic || !rawPrivate) {
+  const jwkPublic = publicKey.export({ format: 'jwk' }).x
+  const jwkPrivate = privateKey.export({ format: 'jwk' }).d
+  if (!jwkPublic || !jwkPrivate) {
     throw new Error('failed to export Ed25519 key material')
   }
 
   return {
-    publicKeyJwk: jwkPublic,
-    privateKeyEncrypted: encryptSecret(Buffer.from(rawPrivate, 'base64url'), encryptionKey),
+    publicKey: Buffer.from(jwkPublic, 'base64url'),
+    privateKeyEncrypted: encryptSecret(Buffer.from(jwkPrivate, 'base64url'), encryptionKey),
   }
 }
 
@@ -136,12 +158,6 @@ function privateKeyObject(rawSeed: Buffer): KeyObject {
   })
 }
 
-function publicKeyObject(jwk: any): KeyObject {
-  return createPublicKey({
-    key: jwk,
-    format: 'jwk',
-  })
-}
 
 /**
  * Sign a raw token with the cycle's private key. Server only, always (rules.md R-021).
@@ -170,14 +186,14 @@ export function signToken(rawToken: string, privateKeyEncrypted: Buffer, key: Bu
 export function verifyTokenSignature(
   rawToken: string,
   signatureB64url: string,
-  publicKeyJwk: any,
+  publicKey: Buffer | Uint8Array,
 ): boolean {
   try {
-    return nodeVerify(
-      null,
-      Buffer.from(rawToken, 'utf8'),
-      publicKeyObject(publicKeyJwk),
+    // noble, not node:crypto — this exact call also runs in the volunteer's browser, offline.
+    return ed.verify(
       Buffer.from(signatureB64url, 'base64url'),
+      Buffer.from(rawToken, 'utf8'),
+      publicKey,
     )
   } catch {
     // Malformed signature, wrong length, bad encoding — all mean "not valid", never a crash.

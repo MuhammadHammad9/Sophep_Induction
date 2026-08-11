@@ -19,7 +19,13 @@
  */
 
 import { useState, useEffect } from 'react'
+import { z } from 'zod'
 import { StateBadge } from '@/components/state/StateBadge'
+
+const evaluationSchema = z.object({
+  scores: z.array(z.object({ criterionId: z.string().uuid(), score: z.number().int() })).min(1),
+  remarks: z.string().trim().max(4000).nullable().optional(),
+})
 
 export interface Criterion {
   id: string
@@ -88,14 +94,23 @@ export function EvaluationForm({
     setSubmitting(true)
     setError(null)
 
+    const payload = {
+      scores: criteria.map((c) => ({ criterionId: c.id, score: scores[c.id] as number })),
+      remarks: remarks.trim() || null,
+    }
+
+    const parsed = evaluationSchema.safeParse(payload)
+    if (!parsed.success) {
+      setError(parsed.error.issues[0]?.message ?? 'Invalid evaluation data.')
+      setSubmitting(false)
+      return
+    }
+
     try {
       const res = await fetch(`/api/interviews/${interviewId}/evaluations`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          scores: criteria.map((c) => ({ criterionId: c.id, score: scores[c.id] })),
-          remarks: remarks.trim() || null,
-        }),
+        body: JSON.stringify(payload),
       })
 
       if (!res.ok) {

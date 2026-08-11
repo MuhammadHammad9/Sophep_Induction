@@ -14,7 +14,7 @@ import { withContext, searchApplicants } from '@sophep/backend'
 import { requireStaff, hasCapability, unauthorized, forbidden } from '@/lib/auth/session'
 
 export async function GET(req: Request) {
-  const staff = await requireStaff(req)
+  const staff = await requireStaff()
   if (!staff) return unauthorized()
 
   if (!(await hasCapability(staff, 'checkin.perform'))) {

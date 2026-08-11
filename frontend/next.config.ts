@@ -60,6 +60,15 @@ const nextConfig: NextConfig = {
           { key: 'Permissions-Policy', value: 'geolocation=(), microphone=(), camera=(self)' },
         ],
       },
+      {
+        source: '/(.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|woff|woff2|ttf))',
+        headers: [
+          {
+            key: 'Cache-Control',
+            value: 'public, max-age=31536000, immutable',
+          },
+        ],
+      },
     ]
   },
 }

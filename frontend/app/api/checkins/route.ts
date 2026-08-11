@@ -17,7 +17,7 @@ import {
   RmsError,
   withIdempotency,
 } from '@sophep/backend'
-import { requireStaff, unauthorized } from '@/lib/auth/session'
+import { requireStaff, unauthorized, hasCapability, forbidden } from '@/lib/auth/session'
 
 const bodySchema = z
   .object({
@@ -36,8 +36,12 @@ const bodySchema = z
   })
 
 export async function POST(req: Request) {
-  const staff = await requireStaff(req)
+  const staff = await requireStaff()
   if (!staff) return unauthorized()
+
+  if (!(await hasCapability(staff, 'checkin.perform'))) {
+    return forbidden('checkin.perform')
+  }
 
   let payload: unknown
   try {

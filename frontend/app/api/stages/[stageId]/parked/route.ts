@@ -8,7 +8,7 @@ export async function GET(
 ) {
   const { stageId } = await params
 
-  const staff = await requireStaff(req)
+  const staff = await requireStaff()
   if (!staff) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }

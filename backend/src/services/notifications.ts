@@ -126,7 +126,7 @@ export async function enqueue(tx: Tx, req: NotificationRequest): Promise<string>
  * dashboard lie — and FR-NOT-003 puts bounces in front of a human precisely so that
  * undelivered results get chased.
  */
-export interface EmailAdapter {
+export interface NotificationProvider {
   readonly name: string
   send(message: {
     to: string
@@ -136,16 +136,45 @@ export interface EmailAdapter {
   }): Promise<{ providerId: string | null; delivered: boolean }>
 }
 
-export const mockAdapter: EmailAdapter = {
+export const MockProvider: NotificationProvider = {
   name: 'mock',
-  async send() {
+  async send(message) {
+    console.log(`[MockProvider] Sending email to ${message.to}: ${message.subject}`)
     return { providerId: null, delivered: false }
   },
 }
 
-export function getAdapter(): EmailAdapter {
-  if (!process.env['RESEND_API_KEY']) return mockAdapter
-  throw new Error(
-    'Resend adapter is not implemented yet — Phase 4. Unset RESEND_API_KEY to use the mock.',
-  )
+export const ResendProvider: NotificationProvider = {
+  name: 'resend',
+  async send(message) {
+    const apiKey = process.env['RESEND_API_KEY']
+    if (!apiKey) throw new Error('RESEND_API_KEY is not set')
+
+    const res = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        from: process.env['RESEND_FROM_EMAIL'] || 'onboarding@resend.dev',
+        to: message.to,
+        subject: message.subject,
+        html: message.html,
+        text: message.text,
+      }),
+    })
+
+    if (!res.ok) {
+      throw new Error(`Resend API error: ${res.status} ${await res.text()}`)
+    }
+
+    const data = (await res.json()) as { id?: string }
+    return { providerId: data.id ?? null, delivered: true }
+  }
+}
+
+export function getProvider(): NotificationProvider {
+  if (!process.env['RESEND_API_KEY']) return MockProvider
+  return ResendProvider
 }

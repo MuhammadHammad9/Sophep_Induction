@@ -20,7 +20,7 @@ export default async function InterviewPage({
 }) {
   const { interviewId } = await params
 
-  const staff = await requireStaff(new Request('http://internal/interview'))
+  const staff = await requireStaff()
   if (!staff) redirect('/staff/sign-in')
 
   const data = await withContext(staff.context, async (tx) => {

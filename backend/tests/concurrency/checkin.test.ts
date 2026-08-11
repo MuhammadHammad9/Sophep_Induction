@@ -38,7 +38,11 @@ beforeAll(async () => {
   const kp = generateCycleKeypair(encKey)
   await sql`
     UPDATE cycles
-       SET qr_public_key_jwk = ${kp.publicKeyJwk as any}::jsonb,
+       SET qr_public_key_jwk = ${sql.json({
+         kty: 'OKP',
+         crv: 'Ed25519',
+         x: kp.publicKey.toString('base64url'),
+       })}::jsonb,
            qr_private_key_enc = ${kp.privateKeyEncrypted}::bytea
      WHERE id = ${fx.cycleId}::uuid
   `
@@ -247,19 +251,22 @@ describe('offline roster bundle (FR-CHK-018)', () => {
       rows.map((r) => Buffer.from(r.token_hash_b64, 'base64').toString('base64url')),
     )
 
-    const [cycle] = await sql<Array<{ qr_public_key_jwk: any }>>`
+    const [cycle] = await sql<Array<{ qr_public_key_jwk: { x: string } }>>`
       SELECT qr_public_key_jwk FROM cycles WHERE id = ${fx.cycleId}::uuid
     `
+    // Stored as a JWK, verified as raw 32 bytes — the single conversion point lives in
+    // services/checkin.ts (jwkToRawPublicKey).
+    const rawPublic = Buffer.from(cycle!.qr_public_key_jwk.x, 'base64url')
 
     // Real token, no network, no secret on the device.
-    expect(verifyOffline(rawToken, roster, cycle!.qr_public_key_jwk).valid).toBe(true)
+    expect(verifyOffline(rawToken, roster, rawPublic).valid).toBe(true)
 
     // Someone who holds the roster and the public key still cannot mint a working code.
     // That is the entire correction to E1.
     const forged = generateToken()
     const forgedSig = signToken(forged.raw, generateCycleKeypair(encKey).privateKeyEncrypted, encKey)
     expect(
-      verifyOffline(`${forged.raw}.${forgedSig}`, roster, cycle!.qr_public_key_jwk).valid,
+      verifyOffline(`${forged.raw}.${forgedSig}`, roster, rawPublic).valid,
     ).toBe(false)
   })
 })

@@ -12,6 +12,7 @@
  */
 
 import { useState, useId } from 'react'
+import { registrationInputSchema } from '@sophep/backend'
 
 export interface Department {
   id: string
@@ -54,19 +55,35 @@ export function ApplyForm({
 
     const data = new FormData(e.currentTarget)
 
+    const payload = {
+      cycleId,
+      fullName: data.get('fullName'),
+      email: data.get('email'),
+      phone: data.get('phone'),
+      rollNumber: data.get('rollNumber') || null,
+      preferences,
+      answers: {},
+      source: 'online',
+    }
+
+    const parsed = registrationInputSchema.safeParse(payload)
+    if (!parsed.success) {
+      const fieldErrors: FieldErrors = {}
+      for (const issue of parsed.error.issues) {
+        const key = issue.path[0] as string
+        if (key && !fieldErrors[key]) fieldErrors[key] = issue.message
+      }
+      setErrors(fieldErrors)
+      setBanner('Please correct the highlighted fields.')
+      setSubmitting(false)
+      return
+    }
+
     try {
       const res = await fetch('/api/apply', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          cycleId,
-          fullName: data.get('fullName'),
-          email: data.get('email'),
-          phone: data.get('phone'),
-          rollNumber: data.get('rollNumber') || null,
-          preferences,
-          answers: {},
-        }),
+        body: JSON.stringify(payload),
       })
 
       const body = await res.json().catch(() => null)
@@ -195,6 +212,13 @@ export function ApplyForm({
                   onClick={() => togglePreference(d.id)}
                   disabled={full}
                   aria-pressed={selected}
+                  aria-label={
+                    selected
+                      ? `Remove ${d.name} (currently preference ${rank + 1})`
+                      : full
+                        ? `Limit reached, cannot select ${d.name}`
+                        : `Select ${d.name} as preference ${preferences.length + 1}`
+                  }
                   className={`flex w-full touch-target items-center justify-between rounded-control border px-4 py-3 text-left ${
                     selected
                       ? 'border-primary bg-state-live-fill'
