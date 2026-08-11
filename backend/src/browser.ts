@@ -18,6 +18,10 @@
  * server still re-validates every time (FR-REG-003) — this is ergonomics, not a gate.
  */
 
+// The four-layer QR check. Browser-safe by construction: no node:crypto anywhere in its
+// import graph, so the volunteer's phone runs the SAME verification the server does.
+export * from './domain/qr'
+
 export * from './domain/normalisation'
 export * from './domain/errors'
 export * from './domain/schemas'

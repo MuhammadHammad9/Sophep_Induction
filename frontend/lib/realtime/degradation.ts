@@ -11,7 +11,7 @@ interface UseRealtimeOptions<T> {
   table?: string
   filter?: string
   fetchInitialData: () => Promise<T>
-  onUpdate: (payload: any) => void
+  onUpdate: (payload: unknown) => void
   pollingIntervalMs?: number
 }
 
@@ -38,7 +38,7 @@ export function useRealtime<T>({
   const [state, setState] = useState<RealtimeState>('live')
   
   const supabase = createClient()
-  const channelRef = useRef<any>(null)
+  const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null)
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const reconnectStartRef = useRef<number | null>(null)
 
@@ -61,21 +61,33 @@ export function useRealtime<T>({
   useEffect(() => {
     let mounted = true
 
-    // Initial fetch
-    doPoll()
+    // Deferred out of the effect body: doPoll setStates, and doing that synchronously on
+    // mount triggers a cascading re-render on every live surface.
+    void Promise.resolve().then(doPoll)
 
     // 1. Setup Supabase Realtime Channel
-    const channel: any = supabase.channel(channelName)
+    const channel = supabase.channel(channelName)
     channelRef.current = channel
 
-    channel
-      .on('postgres_changes', { event, schema, table, filter }, (payload: any) => {
+    // supabase-js types `.on` through overloads keyed on a literal event name, and the
+    // generic postgres_changes form does not narrow from our variables. Cast through unknown
+    // once, here, rather than weakening the surrounding types.
+    const subscription = channel as unknown as {
+      on: (
+        event: string,
+        filterSpec: Record<string, unknown>,
+        handler: (payload: unknown) => void,
+      ) => { subscribe: (cb: (status: string) => void) => unknown }
+    }
+
+    subscription
+      .on('postgres_changes', { event, schema, table, filter }, (payload: unknown) => {
         if (mounted) {
           onUpdate(payload)
           setLastUpdated(new Date())
         }
       })
-      .subscribe((status: string, err?: Error) => {
+      .subscribe((status: string) => {
         if (!mounted) return
 
         if (status === 'SUBSCRIBED') {

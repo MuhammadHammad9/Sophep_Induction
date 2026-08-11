@@ -30,7 +30,8 @@ const buckets = new Map<string, Bucket>()
 
 // Bound the map so a flood of distinct IPs cannot exhaust memory — the limiter must not
 // become the outage it exists to prevent.
-const MAX_BUCKETS = process.env.RATE_LIMIT_MAX_BUCKETS ? parseInt(process.env.RATE_LIMIT_MAX_BUCKETS, 10) : 10_000
+const parsedLimit = parseInt(process.env.RATE_LIMIT_MAX_BUCKETS || '', 10)
+const MAX_BUCKETS = Number.isNaN(parsedLimit) ? 10_000 : parsedLimit
 
 interface Limit {
   windowMs: number

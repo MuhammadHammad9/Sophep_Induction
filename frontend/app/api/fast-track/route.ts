@@ -26,7 +26,7 @@ export async function POST(req: Request) {
   }
 
   const input = parsed.data
-  const stageId = (payload as any).stageId
+  const stageId = (payload as { stageId?: string }).stageId
 
   if (!stageId) {
     return NextResponse.json(

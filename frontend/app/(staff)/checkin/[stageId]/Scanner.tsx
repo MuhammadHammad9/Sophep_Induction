@@ -22,7 +22,8 @@ import { useScanner } from '@/lib/scanner/useScanner'
 import { StateBadge } from '@/components/state/StateBadge'
 import { useOfflineSync } from '@/lib/offline/useOfflineSync'
 import { OfflineBanner } from '@/components/scanner/OfflineBanner'
-import { addPendingOperation, getOfflineApplicantByHash } from '@/lib/offline/indexeddb'
+import { addPendingOperation, getOfflineRosterHashes } from '@/lib/offline/indexeddb'
+import { verifyOfflineQR } from '@/lib/offline/verifyQR'
 
 interface CheckInResponse {
   outcome: 'checked_in' | 'already'
@@ -36,6 +37,14 @@ interface CheckInResponse {
 type Result =
   | { kind: 'success'; data: CheckInResponse }
   | { kind: 'repeat'; data: CheckInResponse }
+  /**
+   * Queued locally because the network was unavailable. NOT a confirmed check-in.
+   *
+   * Spec §14.1 #8 is explicit: on a network drop the UI says PENDING, not done. Rendering this
+   * as a success would be a number we know is provisional shown as final (principle 2,
+   * NFR-AVAIL-005) — and a replay can still fail, for instance if the code was never valid.
+   */
+  | { kind: 'pending'; displayId: string | null; fullName: string | null; queuedAt: string }
   | { kind: 'error'; headline: string; guidance?: string }
 
 const SUCCESS_DWELL_MS = 2500
@@ -52,6 +61,10 @@ export function Scanner({
   const [searchOpen, setSearchOpen] = useState(false)
   const [parkedCount, setParkedCount] = useState(0)
   const dismissTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // The cached roster's token hashes. Loaded once and held in a ref so a scan never waits on
+  // IndexedDB — the eight-second budget (NFR-PERF-003) has no room for it.
+  const rosterRef = useRef<ReadonlySet<string>>(new Set())
   const { isOffline, pendingCount } = useOfflineSync()
 
   // Poll for parked applicants
@@ -78,6 +91,16 @@ export function Scanner({
       clearInterval(timer)
     }
   }, [stageId, isOffline])
+
+  useEffect(() => {
+    let active = true
+    void getOfflineRosterHashes().then((hashes) => {
+      if (active) rosterRef.current = hashes
+    })
+    return () => {
+      active = false
+    }
+  }, [])
 
   const clearResult = useCallback(() => {
     if (dismissTimer.current) clearTimeout(dismissTimer.current)
@@ -114,9 +137,25 @@ export function Scanner({
             : { kind: 'success', data: payload },
         )
       } catch {
-        // Fallback to offline mode
+        // The network failed. Queue the operation locally and REPLAY it later with its
+        // original Idempotency-Key, so a double-submit is harmless (FR-CHK-008, FR-CHK-014).
         const clientTs = (body.clientTs as string) || new Date().toISOString()
         const id = crypto.randomUUID()
+
+        // Look the person up in the cached roster purely so the volunteer can confirm they
+        // scanned the right applicant. This does NOT make the check-in confirmed.
+        let offlineIdentity: { displayId: string; fullName: string } | null = null
+        if (typeof body.scanned === 'string') {
+          try {
+            const verified = await verifyOfflineQR(body.scanned, rosterRef.current)
+            offlineIdentity = verified.applicant
+              ? { displayId: verified.applicant.displayId, fullName: verified.applicant.fullName }
+              : null
+          } catch {
+            // Verification is best-effort here; the queued operation stands either way and the
+            // server is the authority when it replays.
+          }
+        }
         
         await addPendingOperation({
           id,
@@ -126,17 +165,14 @@ export function Scanner({
           clientTs
         })
 
-        // Give a provisional success if it's a known offline scenario
+        // Queued, NOT checked in. Whatever the roster can tell us about this person is shown
+        // so the volunteer can confirm they have the right applicant — but the outcome stays
+        // explicitly provisional until the server confirms it.
         setResult({
-          kind: 'success',
-          data: {
-            outcome: 'checked_in',
-            displayId: 'OFFLINE',
-            fullName: 'Check-in pending sync',
-            position: 0,
-            checkedInAt: clientTs,
-            etaSuppressed: true,
-          }
+          kind: 'pending',
+          displayId: offlineIdentity?.displayId ?? null,
+          fullName: offlineIdentity?.fullName ?? null,
+          queuedAt: clientTs,
         })
       } finally {
         setSubmitting(false)
@@ -156,7 +192,9 @@ export function Scanner({
   // FR-CHK-002 / FR-CHK-003: successes auto-clear so the volunteer never taps; failures do not.
   useEffect(() => {
     if (!result) return
-    if (result.kind === 'error') return
+    // Errors AND pending both require explicit dismissal. A provisional outcome that
+    // auto-clears is indistinguishable from a confirmed one (FR-CHK-003, NFR-AVAIL-005).
+    if (result.kind === 'error' || result.kind === 'pending') return
 
     dismissTimer.current = setTimeout(clearResult, SUCCESS_DWELL_MS)
     return () => {
@@ -271,6 +309,49 @@ function ResultOverlay({ result, onDismiss }: { result: Result; onDismiss: () =>
           className="mt-8 min-h-touch rounded-control bg-white px-8 py-3 font-semibold text-state-blocked"
         >
           Dismiss
+        </button>
+      </div>
+    )
+  }
+
+  if (result.kind === 'pending') {
+    const queued = new Date(result.queuedAt).toLocaleTimeString('en-GB', {
+      hour: '2-digit',
+      minute: '2-digit',
+    })
+
+    return (
+      <div
+        role="alert"
+        className="stripe-offline absolute inset-0 flex flex-col items-center justify-center bg-state-offline p-6 text-center text-white"
+      >
+        {/* Colour is never the only signal (R-060): the offline state carries stripes and a
+            distinct icon as well. */}
+        <StateBadge state="offline">Saved — not yet confirmed</StateBadge>
+
+        {result.displayId ? (
+          <>
+            <p className="id-text mt-4 text-id-xl">{result.displayId}</p>
+            <p className="text-h2">{result.fullName}</p>
+          </>
+        ) : (
+          <p className="mt-4 text-h2">Scan saved</p>
+        )}
+
+        <p className="mt-3 text-body">
+          Queued at {queued}. It will be sent when the network returns.
+        </p>
+        <p className="mt-1 text-small opacity-90">
+          Not checked in yet — check the pending count before the stage closes.
+        </p>
+
+        {/* Requires dismissal. A provisional outcome that auto-clears reads exactly like a
+            confirmed one, which is the confusion this whole state exists to prevent. */}
+        <button
+          onClick={onDismiss}
+          className="mt-8 min-h-touch rounded-control bg-white px-8 py-3 font-semibold text-state-offline"
+        >
+          Got it
         </button>
       </div>
     )

@@ -14,7 +14,9 @@ export function useOfflineSync() {
   }, [])
 
   useEffect(() => {
-    updateStatus()
+    // Deferred out of the effect body. Calling updateStatus() synchronously setStates during
+    // the effect, which triggers a cascading re-render on every mount of the scanner.
+    void Promise.resolve().then(updateStatus)
 
     const handleOnline = async () => {
       setIsOffline(false)

@@ -1,47 +1,66 @@
-import { getOfflineApplicantByHash } from './indexeddb'
+/**
+ * Offline QR verification at the desk.
+ *
+ * This is deliberately a THIN wrapper. The verification itself lives in
+ * `@sophep/backend/browser`, which is the same module the server uses — so the phone and the
+ * API cannot disagree about whether a code is valid. A second implementation here is exactly
+ * how they drift, and the drift only shows up with the WiFi off.
+ *
+ * An earlier local implementation got three things wrong, all silently:
+ *   - it hashed the token's decoded bytes rather than the token string, so the roster lookup
+ *     could never match
+ *   - it skipped the Ed25519 check entirely, so nothing was actually verified
+ *   - its parser required a signature, rejecting a bare token — the common case
+ *
+ * Refs: FR-CHK-004, FR-CHK-005, FR-CHK-018, E1
+ */
 
-export async function verifyOfflineQR(scanned: string, cyclePublicKeyBase64: string | null) {
-  // Extract token and signature
-  // URL format: https://apply.sophep.org/q/<token>.<signature>
-  const match = scanned.match(/\/q\/([^.]+)\.(.+)$/)
-  if (!match) {
-    throw new Error('Not a valid SOPHEP code')
-  }
+import { verifyOffline, base64UrlToBytes, type VerificationOutcome } from '@sophep/backend/browser'
+import { getOfflineApplicantByHash, getOfflineCyclePublicKey } from './indexeddb'
 
-  const tokenBase64Url = match[1]
-  const signatureBase64Url = match[2]
-
-  // Layer 2: Roster Hash
-  // In a real implementation, we'd hash the token and look it up
-  // We need crypto.subtle.digest('SHA-256', ...)
-  
-  // Convert base64url to Uint8Array
-  const tokenBytes = base64UrlDecode(tokenBase64Url as string)
-  
-  const hashBuffer = await crypto.subtle.digest('SHA-256', tokenBytes)
-  const hashArray = Array.from(new Uint8Array(hashBuffer))
-  const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('')
-
-  const applicant = await getOfflineApplicantByHash(hashHex)
-  if (!applicant) {
-    throw new Error('Not found in offline roster')
-  }
-
-  // Layer 3: Ed25519 verification would go here (skipped for brevity unless needed)
-  // using something like @noble/ed25519 if we had it, or just returning the applicant
-  
-  return applicant
+export interface OfflineScanResult {
+  outcome: VerificationOutcome
+  /** Present only when the roster knows this token. Never fabricated. */
+  applicant: { applicantId: string; displayId: string; fullName: string } | null
+  /**
+   * True when the device verified a SIGNATURE but has no roster entry — a genuine late
+   * registration. The scan is valid, but the desk knows nothing about the person yet, so the
+   * UI must not pretend it does.
+   */
+  verifiedButUnknown: boolean
 }
 
-function base64UrlDecode(base64Url: string) {
-  const padding = '='.repeat((4 - base64Url.length % 4) % 4)
-  const base64 = (base64Url + padding)
-    .replace(/\-/g, '+')
-    .replace(/_/g, '/')
-  const rawData = atob(base64)
-  const outputArray = new Uint8Array(rawData.length)
-  for (let i = 0; i < rawData.length; ++i) {
-    outputArray[i] = rawData.charCodeAt(i)
+/**
+ * Verify a scanned value using only material safe to hold on a device.
+ *
+ * Returns a structured outcome rather than throwing: a damaged QR is routine input at a
+ * check-in desk, not an exceptional condition, and forcing every caller into a try/catch is
+ * how a failure ends up rendered as a success.
+ */
+export async function verifyOfflineQR(
+  scanned: string,
+  roster: ReadonlySet<string>,
+): Promise<OfflineScanResult> {
+  const publicKeyBase64Url = await getOfflineCyclePublicKey()
+  const publicKey = publicKeyBase64Url ? base64UrlToBytes(publicKeyBase64Url) : null
+
+  const outcome = verifyOffline(scanned, roster, publicKey)
+
+  if (!outcome.valid) {
+    return { outcome, applicant: null, verifiedButUnknown: false }
   }
-  return outputArray
+
+  const stored = await getOfflineApplicantByHash(outcome.tokenHash)
+
+  return {
+    outcome,
+    applicant: stored
+      ? {
+          applicantId: stored.applicantId,
+          displayId: stored.displayId,
+          fullName: stored.fullName,
+        }
+      : null,
+    verifiedButUnknown: !stored,
+  }
 }
