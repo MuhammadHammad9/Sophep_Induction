@@ -44,7 +44,7 @@ export async function ensureCycleKeypair(tx: Tx, cycleId: string): Promise<Buffe
   // response body (rules.md R-021, NFR-MAIN-006).
   await tx`
     SELECT fn_audit(${cycleId}::uuid, 'cycle.keypair_generated', 'cycle', ${cycleId}::uuid,
-                    NULL, ${JSON.stringify({ public_key_b64: keypair.publicKey.toString('base64') })}::jsonb, NULL)
+                    NULL, ${tx.json({ public_key_b64: keypair.publicKey.toString('base64') })}::jsonb, NULL)
   `
 
   return keypair.publicKey
