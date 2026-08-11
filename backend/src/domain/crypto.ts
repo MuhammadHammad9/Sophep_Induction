@@ -37,12 +37,13 @@ import {
   createDecipheriv,
   type KeyObject,
 } from 'node:crypto'
+import * as ed from '@noble/ed25519'
 
 // ── Key material ────────────────────────────────────────────────────────────────────────
 
 export interface CycleKeypair {
-  /** Raw 32-byte Ed25519 public key. Safe to ship to any device. */
-  publicKey: Buffer
+  /** JWK object for Ed25519 public key. Safe to ship to any device. */
+  publicKeyJwk: object
   /** Raw 32-byte Ed25519 seed, encrypted at the application layer. NEVER leaves the server. */
   privateKeyEncrypted: Buffer
 }
@@ -58,16 +59,16 @@ export interface CycleKeypair {
 export function generateCycleKeypair(encryptionKey: Buffer): CycleKeypair {
   const { publicKey, privateKey } = generateKeyPairSync('ed25519')
 
-  // Export the raw 32 bytes rather than DER/PEM: the public key is shipped to every device in
+  // Export the JWK. The public key is shipped to every device in
   // the offline roster bundle, which has a 100 KB budget for 500 applicants (NFR-PERF-009).
-  const rawPublic = publicKey.export({ format: 'jwk' }).x
+  const jwkPublic = publicKey.export({ format: 'jwk' })
   const rawPrivate = privateKey.export({ format: 'jwk' }).d
-  if (!rawPublic || !rawPrivate) {
+  if (!jwkPublic || !rawPrivate) {
     throw new Error('failed to export Ed25519 key material')
   }
 
   return {
-    publicKey: Buffer.from(rawPublic, 'base64url'),
+    publicKeyJwk: jwkPublic,
     privateKeyEncrypted: encryptSecret(Buffer.from(rawPrivate, 'base64url'), encryptionKey),
   }
 }
@@ -128,15 +129,16 @@ export function encryptionKeyFromEnv(env = process.env): Buffer {
 // ── Signing ─────────────────────────────────────────────────────────────────────────────
 
 function privateKeyObject(rawSeed: Buffer): KeyObject {
+  const rawPublic = ed.getPublicKey(rawSeed)
   return createPrivateKey({
-    key: { kty: 'OKP', crv: 'Ed25519', d: rawSeed.toString('base64url'), x: '' },
+    key: { kty: 'OKP', crv: 'Ed25519', d: rawSeed.toString('base64url'), x: Buffer.from(rawPublic).toString('base64url') },
     format: 'jwk',
   })
 }
 
-function publicKeyObject(rawPublic: Buffer): KeyObject {
+function publicKeyObject(jwk: any): KeyObject {
   return createPublicKey({
-    key: { kty: 'OKP', crv: 'Ed25519', x: rawPublic.toString('base64url') },
+    key: jwk,
     format: 'jwk',
   })
 }
@@ -168,13 +170,13 @@ export function signToken(rawToken: string, privateKeyEncrypted: Buffer, key: Bu
 export function verifyTokenSignature(
   rawToken: string,
   signatureB64url: string,
-  publicKey: Buffer,
+  publicKeyJwk: any,
 ): boolean {
   try {
     return nodeVerify(
       null,
       Buffer.from(rawToken, 'utf8'),
-      publicKeyObject(publicKey),
+      publicKeyObject(publicKeyJwk),
       Buffer.from(signatureB64url, 'base64url'),
     )
   } catch {

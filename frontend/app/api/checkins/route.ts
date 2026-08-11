@@ -15,6 +15,7 @@ import {
   checkIn,
   resolveScannedToken,
   RmsError,
+  withIdempotency,
 } from '@sophep/backend'
 import { requireStaff, unauthorized } from '@/lib/auth/session'
 
@@ -64,38 +65,43 @@ export async function POST(req: Request) {
 
   const input = parsed.data
 
+  const idempotencyKey = req.headers.get('Idempotency-Key')
+
   try {
-    const result = await withContext(staff.context, async (tx) => {
-      let applicantId = input.applicantId
+    const result = await withIdempotency(idempotencyKey, async () => {
+      return await withContext(staff.context, async (tx) => {
+        let applicantId = input.applicantId
 
-      if (!applicantId && input.scanned) {
-        const resolved = await resolveScannedToken(tx, input.scanned)
+        if (!applicantId && input.scanned) {
+          const resolved = await resolveScannedToken(tx, input.scanned)
 
-        // Layer 4. The device may have accepted this offline; the server is the authority on
-        // revocation, expiry and cycle.
-        if (!resolved) {
-          throw new RmsError('TOKEN_INVALID', 'Not a valid SOPHEP code')
+          // Layer 4. The device may have accepted this offline; the server is the authority on
+          // revocation, expiry and cycle.
+          if (!resolved) {
+            throw new RmsError('TOKEN_INVALID', 'Not a valid SOPHEP code')
+          }
+          if (resolved.revoked) {
+            throw new RmsError('TOKEN_INVALID', 'This code has been replaced — refresh the status page')
+          }
+          if (resolved.expired) {
+            throw new RmsError('TOKEN_EXPIRED', 'This code has expired')
+          }
+          applicantId = resolved.applicantId
         }
-        if (resolved.revoked) {
-          throw new RmsError('TOKEN_INVALID', 'This code has been replaced — refresh the status page')
-        }
-        if (resolved.expired) {
-          throw new RmsError('TOKEN_EXPIRED', 'This code has expired')
-        }
-        applicantId = resolved.applicantId
-      }
 
-      return checkIn(tx, {
-        applicantId: applicantId!,
-        stageId: input.stageId,
-        ...(input.trackId ? { trackId: input.trackId } : {}),
-        method: input.method,
-        ...(input.clientTs ? { clientTs: new Date(input.clientTs) } : {}),
-        ...(input.clientRequestId ? { clientRequestId: input.clientRequestId } : {}),
+        return checkIn(tx, {
+          applicantId: applicantId!,
+          stageId: input.stageId,
+          ...(input.trackId ? { trackId: input.trackId } : {}),
+          method: input.method,
+          ...(input.clientTs ? { clientTs: new Date(input.clientTs) } : {}),
+          ...(input.clientRequestId ? { clientRequestId: input.clientRequestId } : {}),
+        })
       })
     })
 
     // 200 rather than 201 for a repeat: nothing was created, and the client renders this
+
     // AMBER, not red (FR-CHK-006, R-027).
     return NextResponse.json(result, { status: result.outcome === 'already' ? 200 : 201 })
   } catch (err) {

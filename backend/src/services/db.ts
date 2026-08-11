@@ -131,3 +131,23 @@ export async function withoutContext<T>(fn: (tx: Tx) => Promise<T>, sql: Sql = g
 export async function asPrivileged<T>(fn: (tx: Tx) => Promise<T>, sql: Sql = getDb()): Promise<T> {
   return sql.begin(async (tx) => fn(tx as Tx)) as Promise<T>
 }
+
+const idempotencyCache = new Map<string, any>()
+
+export async function withIdempotency<T>(
+  key: string | null | undefined,
+  fn: () => Promise<T>
+): Promise<T> {
+  if (!key) return fn()
+  if (idempotencyCache.has(key)) {
+    return idempotencyCache.get(key) as T
+  }
+  const result = await fn()
+  // Ensure the map doesn't grow indefinitely in serverless environment
+  if (idempotencyCache.size > 10_000) {
+    const firstKey = idempotencyCache.keys().next().value
+    if (firstKey) idempotencyCache.delete(firstKey)
+  }
+  idempotencyCache.set(key, result)
+  return result
+}

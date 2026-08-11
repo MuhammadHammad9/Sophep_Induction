@@ -33,11 +33,12 @@ export default async function InterviewPage({
         status: string
         display_id: string
         full_name: string
+        phone: string
         answers: Record<string, unknown>
       }>
     >`
       SELECT i.applicant_id, i.rubric_id, i.started_at, i.status,
-             a.display_id, a.full_name, a.answers
+             a.display_id, a.full_name, a.phone, a.answers
         FROM interviews i
         JOIN applicants a ON a.id = i.applicant_id
        WHERE i.id = ${interviewId}::uuid
@@ -81,7 +82,18 @@ export default async function InterviewPage({
        WHERE i.id = ${interviewId}::uuid
     `
 
-    return { interview, criteria, rubric: rubrics[0], preferences, target: config[0]?.target ?? 20 }
+    const interviewer = await tx<Array<{ full_name: string; phone: string | null }>>`
+      SELECT full_name, phone FROM users WHERE id = ${staff.userId}::uuid
+    `
+
+    return { 
+      interview, 
+      criteria, 
+      rubric: rubrics[0], 
+      preferences, 
+      target: config[0]?.target ?? 20,
+      interviewer: interviewer[0] 
+    }
   })
 
   if (!data?.rubric) notFound()
@@ -89,6 +101,7 @@ export default async function InterviewPage({
   const applicant: Applicant = {
     displayId: data.interview.display_id,
     fullName: data.interview.full_name,
+    phone: data.interview.phone,
     answers: data.interview.answers ?? {},
     preferences: data.preferences,
   }
@@ -113,6 +126,8 @@ export default async function InterviewPage({
       scaleMax={data.rubric.scale_max}
       targetMinutes={data.target}
       startedAt={new Date(data.interview.started_at).toISOString()}
+      interviewerName={data.interviewer?.full_name}
+      interviewerPhone={data.interviewer?.phone}
     />
   )
 }

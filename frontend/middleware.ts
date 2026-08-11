@@ -30,7 +30,7 @@ const buckets = new Map<string, Bucket>()
 
 // Bound the map so a flood of distinct IPs cannot exhaust memory — the limiter must not
 // become the outage it exists to prevent.
-const MAX_BUCKETS = 10_000
+const MAX_BUCKETS = process.env.RATE_LIMIT_MAX_BUCKETS ? parseInt(process.env.RATE_LIMIT_MAX_BUCKETS, 10) : 10_000
 
 interface Limit {
   windowMs: number
@@ -39,7 +39,7 @@ interface Limit {
 
 const LIMITS: Array<{ test: (path: string) => boolean; key: string; limit: Limit }> = [
   // FR-IDT-010: token lookup, 10/min/IP.
-  { test: (p) => p.startsWith('/q/'), key: 'token', limit: { windowMs: 60_000, max: 10 } },
+  { test: (p) => p.startsWith('/q/') || p.startsWith('/api/q/'), key: 'token', limit: { windowMs: 60_000, max: 10 } },
   // NFR-SEC-005: application submission, 3/hour/IP.
   { test: (p) => p === '/api/apply', key: 'apply', limit: { windowMs: 3_600_000, max: 3 } },
   // Staff endpoints are authenticated and used hard during an event — 4 scans/second across a
@@ -48,8 +48,9 @@ const LIMITS: Array<{ test: (path: string) => boolean; key: string; limit: Limit
 ]
 
 function clientIp(req: NextRequest): string {
+  if (req.ip) return req.ip
   const forwarded = req.headers.get('x-forwarded-for')
-  return forwarded?.split(',')[0]?.trim() || req.headers.get('x-real-ip') || 'unknown'
+  return forwarded?.split(',').pop()?.trim() || req.headers.get('x-real-ip') || 'unknown'
 }
 
 function consume(key: string, limit: Limit): { allowed: boolean; retryAfterSeconds: number } {
@@ -59,7 +60,13 @@ function consume(key: string, limit: Limit): { allowed: boolean; retryAfterSecon
     for (const [k, v] of buckets) {
       if (v.resetAt < now) buckets.delete(k)
     }
-    if (buckets.size > MAX_BUCKETS) buckets.clear()
+    if (buckets.size > MAX_BUCKETS) {
+      const sorted = Array.from(buckets.entries()).sort((a, b) => a[1].resetAt - b[1].resetAt)
+      const toDelete = sorted.slice(0, Math.max(1, Math.floor(MAX_BUCKETS * 0.1)))
+      for (const [k] of toDelete) {
+        buckets.delete(k)
+      }
+    }
   }
 
   const existing = buckets.get(key)

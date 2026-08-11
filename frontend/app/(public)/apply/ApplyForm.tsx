@@ -54,40 +54,45 @@ export function ApplyForm({
 
     const data = new FormData(e.currentTarget)
 
-    const res = await fetch('/api/apply', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        cycleId,
-        fullName: data.get('fullName'),
-        email: data.get('email'),
-        phone: data.get('phone'),
-        rollNumber: data.get('rollNumber') || null,
-        preferences,
-        answers: {},
-      }),
-    })
+    try {
+      const res = await fetch('/api/apply', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cycleId,
+          fullName: data.get('fullName'),
+          email: data.get('email'),
+          phone: data.get('phone'),
+          rollNumber: data.get('rollNumber') || null,
+          preferences,
+          answers: {},
+        }),
+      })
 
-    const body = await res.json()
-    setSubmitting(false)
+      const body = await res.json().catch(() => null)
+      
+      if (res.ok) {
+        setResult(body)
+        return
+      }
 
-    if (res.ok) {
-      setResult(body)
-      return
+      if (body?.error?.detail && typeof body.error.detail === 'object') {
+        setErrors(body.error.detail as FieldErrors)
+      }
+
+      // DUPLICATE_APPLICANT gets a specific message. Telling someone "you have already applied"
+      // and pointing them at their existing record is far more useful than a generic failure,
+      // and it is the most common non-happy path on this form.
+      setBanner(
+        body?.error?.code === 'DUPLICATE_APPLICANT'
+          ? 'You have already applied with these details. Check your email for your applicant ID, or ask at the desk.'
+          : (body?.error?.message ?? 'Something went wrong. Please try again.'),
+      )
+    } catch (err) {
+      setBanner('Network error. Please check your connection and try again.')
+    } finally {
+      setSubmitting(false)
     }
-
-    if (body?.error?.detail && typeof body.error.detail === 'object') {
-      setErrors(body.error.detail as FieldErrors)
-    }
-
-    // DUPLICATE_APPLICANT gets a specific message. Telling someone "you have already applied"
-    // and pointing them at their existing record is far more useful than a generic failure,
-    // and it is the most common non-happy path on this form.
-    setBanner(
-      body?.error?.code === 'DUPLICATE_APPLICANT'
-        ? 'You have already applied with these details. Check your email for your applicant ID, or ask at the desk.'
-        : (body?.error?.message ?? 'Something went wrong. Please try again.'),
-    )
   }
 
   if (result) {

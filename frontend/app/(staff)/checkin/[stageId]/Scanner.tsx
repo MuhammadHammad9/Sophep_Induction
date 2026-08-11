@@ -20,6 +20,9 @@
 import { useCallback, useState, useEffect, useRef } from 'react'
 import { useScanner } from '@/lib/scanner/useScanner'
 import { StateBadge } from '@/components/state/StateBadge'
+import { useOfflineSync } from '@/lib/offline/useOfflineSync'
+import { OfflineBanner } from '@/components/scanner/OfflineBanner'
+import { addPendingOperation, getOfflineApplicantByHash } from '@/lib/offline/indexeddb'
 
 interface CheckInResponse {
   outcome: 'checked_in' | 'already'
@@ -47,7 +50,34 @@ export function Scanner({
   const [result, setResult] = useState<Result | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [searchOpen, setSearchOpen] = useState(false)
+  const [parkedCount, setParkedCount] = useState(0)
   const dismissTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const { isOffline, pendingCount } = useOfflineSync()
+
+  // Poll for parked applicants
+  useEffect(() => {
+    if (isOffline) return
+    let active = true
+
+    async function checkParked() {
+      try {
+        const res = await fetch(`/api/stages/${stageId}/parked`)
+        if (res.ok && active) {
+          const data = await res.json()
+          setParkedCount(data.parked ?? 0)
+        }
+      } catch (e) {
+        // silently ignore network errors for polling
+      }
+    }
+
+    void checkParked()
+    const timer = setInterval(checkParked, 15000)
+    return () => {
+      active = false
+      clearInterval(timer)
+    }
+  }, [stageId, isOffline])
 
   const clearResult = useCallback(() => {
     if (dismissTimer.current) clearTimeout(dismissTimer.current)
@@ -83,12 +113,30 @@ export function Scanner({
             ? { kind: 'repeat', data: payload }
             : { kind: 'success', data: payload },
         )
-      } catch {
-        // A network failure at the desk is expected, not exceptional (CON-002).
+      } catch (err) {
+        // Fallback to offline mode
+        const clientTs = (body.clientTs as string) || new Date().toISOString()
+        const id = crypto.randomUUID()
+        
+        await addPendingOperation({
+          id,
+          endpoint: '/api/checkins',
+          method: 'POST',
+          payload: { stageId, ...body },
+          clientTs
+        })
+
+        // Give a provisional success if it's a known offline scenario
         setResult({
-          kind: 'error',
-          headline: 'No connection',
-          guidance: 'Check the network, then scan again.',
+          kind: 'success',
+          data: {
+            outcome: 'checked_in',
+            displayId: 'OFFLINE',
+            fullName: 'Check-in pending sync',
+            position: 0,
+            checkedInAt: clientTs,
+            etaSuppressed: true,
+          }
         })
       } finally {
         setSubmitting(false)
@@ -119,11 +167,21 @@ export function Scanner({
   const { videoRef, state } = useScanner({ onScan, paused: result !== null || searchOpen })
 
   return (
-    <div className="flex min-h-dvh flex-col bg-[#0F172A] text-white">
+    <div className="flex min-h-dvh flex-col bg-[#0F172A] text-white relative">
+      {isOffline || pendingCount > 0 ? (
+        <OfflineBanner pendingCount={pendingCount} />
+      ) : null}
+
       <header className="flex items-center justify-between px-4 py-3">
         <span className="font-medium">{deskName}</span>
         <ConnectionPill state={state} />
       </header>
+
+      {parkedCount > 0 ? (
+        <div className="bg-state-called px-4 py-2 text-center text-sm font-medium text-white shadow-md">
+          {parkedCount} applicant(s) parked — please search and reactivate them
+        </div>
+      ) : null}
 
       <div className="relative flex-1 overflow-hidden bg-black">
         <video

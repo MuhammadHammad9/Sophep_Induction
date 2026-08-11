@@ -10,7 +10,7 @@
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { withContext, RmsError, fromPostgresError } from '@sophep/backend'
+import { withContext, RmsError, fromPostgresError, submitEvaluation } from '@sophep/backend'
 import { requireStaff, hasCapability, unauthorized, forbidden } from '@/lib/auth/session'
 
 const bodySchema = z.object({
@@ -47,18 +47,14 @@ export async function POST(req: Request, ctx: { params: Promise<{ interviewId: s
 
   try {
     const result = await withContext(staff.context, async (tx) => {
-      const rows = await tx<Array<{ id: string; raw_score: string }>>`
-        SELECT id, raw_score FROM fn_submit_evaluation(
-          ${interviewId}::uuid,
-          ${staff.userId}::uuid,
-          ${tx.json(
-            parsed.data.scores.map((s) => ({ criterion_id: s.criterionId, score: s.score })),
-          )}::jsonb,
-          ${parsed.data.remarks ?? null},
-          ${parsed.data.recommendedDepartmentId ?? null}::uuid
-        )
-      `
-      return rows[0]
+      return await submitEvaluation(
+        tx,
+        interviewId,
+        staff.userId,
+        parsed.data.scores,
+        parsed.data.remarks ?? null,
+        parsed.data.recommendedDepartmentId ?? null
+      )
     })
 
     // The raw score is deliberately NOT returned. FR-INT-004: an interviewer must not see an

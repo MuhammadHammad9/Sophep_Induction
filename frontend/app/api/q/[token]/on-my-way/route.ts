@@ -21,13 +21,17 @@ export async function POST(_req: Request, ctx: { params: Promise<{ token: string
   }
 
   try {
+    let applicantId: string | undefined
     await withContext({}, async (tx) => {
       const resolved = await tx<Array<{ applicant_id: string }>>`
         SELECT applicant_id FROM fn_resolve_token(${hashToken(parsed.token)}::bytea)
       `
-      const applicantId = resolved[0]?.applicant_id
-      if (!applicantId) throw new RmsError('TOKEN_INVALID', 'Invalid link')
+      applicantId = resolved[0]?.applicant_id
+    })
 
+    if (!applicantId) throw new RmsError('TOKEN_INVALID', 'Invalid link')
+
+    await withContext({ applicantId }, async (tx) => {
       const entries = await tx<Array<{ id: string }>>`
         SELECT id FROM queue_entries
          WHERE applicant_id = ${applicantId}::uuid AND state = 'called'

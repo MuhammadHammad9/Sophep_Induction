@@ -227,21 +227,20 @@ function Liveness({
 
   return (
     <p className={`mt-3 flex items-center gap-2 text-caption ${tone}`}>
-      <span
-        aria-hidden="true"
-        className={`inline-block h-2 w-2 rounded-full ${
-          connection === 'live'
-            ? 'bg-state-complete'
-            : connection === 'reconnecting'
-              ? 'bg-state-called'
-              : 'bg-state-blocked'
-        }`}
-      />
-      {connection === 'live'
-        ? `Live · updated ${time}`
-        : connection === 'reconnecting'
-          ? `Reconnecting · last updated ${time}`
-          : `Offline · last updated ${time}`}
+      {connection === 'live' ? (
+        <svg viewBox="0 0 16 16" className="h-3 w-3 fill-state-complete" aria-hidden="true"><circle cx="8" cy="8" r="8"/></svg>
+      ) : connection === 'reconnecting' ? (
+        <svg viewBox="0 0 16 16" className="h-3 w-3 fill-state-called" aria-hidden="true"><path d="M8 0L16 16H0z"/></svg>
+      ) : (
+        <svg viewBox="0 0 16 16" className="h-3 w-3 fill-state-blocked" aria-hidden="true"><rect width="16" height="16" rx="2"/></svg>
+      )}
+      <span suppressHydrationWarning>
+        {connection === 'live'
+          ? `Live · updated ${time}`
+          : connection === 'reconnecting'
+            ? `Reconnecting · last updated ${time}`
+            : `Offline · last updated ${time}`}
+      </span>
     </p>
   )
 }

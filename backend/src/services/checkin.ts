@@ -24,18 +24,18 @@ import { tokenHashB64, type RosterBundle } from '../domain/verification'
  * against the current one. Without that, a Fall QR would still scan in Spring and check
  * someone in to an induction they never applied to.
  */
-export async function ensureCycleKeypair(tx: Tx, cycleId: string): Promise<Buffer> {
-  const rows = await tx<Array<{ qr_public_key: Buffer | null }>>`
-    SELECT qr_public_key FROM cycles WHERE id = ${cycleId}::uuid
+export async function ensureCycleKeypair(tx: Tx, cycleId: string): Promise<object> {
+  const rows = await tx<Array<{ qr_public_key_jwk: object | null }>>`
+    SELECT qr_public_key_jwk FROM cycles WHERE id = ${cycleId}::uuid
   `
-  const existing = rows[0]?.qr_public_key
-  if (existing) return Buffer.from(existing)
+  const existing = rows[0]?.qr_public_key_jwk
+  if (existing) return existing
 
   const keypair = generateCycleKeypair(encryptionKeyFromEnv())
 
   await tx`
     UPDATE cycles
-       SET qr_public_key      = ${keypair.publicKey}::bytea,
+       SET qr_public_key_jwk  = ${keypair.publicKeyJwk as any}::jsonb,
            qr_private_key_enc = ${keypair.privateKeyEncrypted}::bytea
      WHERE id = ${cycleId}::uuid
   `
@@ -44,10 +44,10 @@ export async function ensureCycleKeypair(tx: Tx, cycleId: string): Promise<Buffe
   // response body (rules.md R-021, NFR-MAIN-006).
   await tx`
     SELECT fn_audit(${cycleId}::uuid, 'cycle.keypair_generated', 'cycle', ${cycleId}::uuid,
-                    NULL, ${tx.json({ public_key_b64: keypair.publicKey.toString('base64') })}::jsonb, NULL)
+                    NULL, ${tx.json({ public_key_jwk: keypair.publicKeyJwk })}::jsonb, NULL)
   `
 
-  return keypair.publicKey
+  return keypair.publicKeyJwk
 }
 
 /**
@@ -83,10 +83,10 @@ export async function buildRosterBundle(
   cycleId: string,
   stageId: string,
 ): Promise<RosterBundle> {
-  const [cycle] = await tx<Array<{ qr_public_key: Buffer | null }>>`
-    SELECT qr_public_key FROM cycles WHERE id = ${cycleId}::uuid
+  const [cycle] = await tx<Array<{ qr_public_key_jwk: object | null }>>`
+    SELECT qr_public_key_jwk FROM cycles WHERE id = ${cycleId}::uuid
   `
-  if (!cycle?.qr_public_key) {
+  if (!cycle?.qr_public_key_jwk) {
     throw new Error(`cycle ${cycleId} has no public key`)
   }
 
@@ -104,7 +104,7 @@ export async function buildRosterBundle(
     tokenHashes: rows.map((r) =>
       Buffer.from(r.token_hash_b64, 'base64').toString('base64url'),
     ),
-    publicKey: Buffer.from(cycle.qr_public_key).toString('base64url'),
+    publicKey: cycle.qr_public_key_jwk,
     generatedAt: new Date().toISOString(),
   }
 }

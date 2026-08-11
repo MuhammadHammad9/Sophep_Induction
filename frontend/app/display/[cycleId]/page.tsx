@@ -13,6 +13,7 @@
  */
 
 import { withContext } from '@sophep/backend'
+import { AutoRefresh } from './AutoRefresh'
 
 export const dynamic = 'force-dynamic'
 // Polled rather than live: a wall screen has no user to notice a dropped socket, so a simple
@@ -52,6 +53,7 @@ export default async function DisplayBoard({
 
   return (
     <div className="min-h-dvh bg-[#0F172A] p-8 text-white">
+      <AutoRefresh intervalMs={10000} />
       <h1 className="text-center text-[3vw] font-semibold uppercase tracking-[0.2em] text-slate-300">
         Now Calling
       </h1>

@@ -16,6 +16,7 @@ import {
   buildQrPayload,
   RmsError,
   withContext,
+  withIdempotency,
   registrationInputSchema,
 } from '@sophep/backend'
 
@@ -38,28 +39,32 @@ export async function POST(req: Request) {
 
   const input = parsed.data
 
+  const idempotencyKey = req.headers.get('Idempotency-Key')
+  
   try {
-    const result = await withContext({ clientIp: clientIpOf(req) }, async (tx) => {
-      const registered = await register(tx, input)
+    const result = await withIdempotency(idempotencyKey, async () => {
+      return await withContext({ clientIp: clientIpOf(req) }, async (tx) => {
+        const registered = await register(tx, input)
 
-      const baseUrl = process.env['NEXT_PUBLIC_APP_URL'] ?? 'http://localhost:3000'
-      const statusUrl = buildQrPayload(baseUrl, registered.token.raw)
+        const baseUrl = process.env['NEXT_PUBLIC_APP_URL'] ?? 'http://localhost:3000'
+        const statusUrl = buildQrPayload(baseUrl, registered.token.raw)
 
-      // FR-NOT-001: ENQUEUED, never sent inline. A slow email provider must not be able to
-      // hold up an application submission (CON-004, rules.md R-030).
-      await enqueue(tx, {
-        cycleId: input.cycleId,
-        applicantId: registered.applicantId,
-        toEmail: input.email,
-        templateKey: 'registration.confirmation',
-        variables: {
-          fullName: input.fullName,
-          displayId: registered.displayId,
-          statusUrl,
-        },
+        // FR-NOT-001: ENQUEUED, never sent inline. A slow email provider must not be able to
+        // hold up an application submission (CON-004, rules.md R-030).
+        await enqueue(tx, {
+          cycleId: input.cycleId,
+          applicantId: registered.applicantId,
+          toEmail: input.email,
+          templateKey: 'registration.confirmation',
+          variables: {
+            fullName: input.fullName,
+            displayId: registered.displayId,
+            statusUrl,
+          },
+        })
+
+        return { displayId: registered.displayId, statusUrl }
       })
-
-      return { displayId: registered.displayId, statusUrl }
     })
 
     // The raw token appears in statusUrl here, in this response, once. It is never persisted

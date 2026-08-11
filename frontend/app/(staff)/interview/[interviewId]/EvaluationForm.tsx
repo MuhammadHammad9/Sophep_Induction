@@ -35,6 +35,7 @@ export interface Criterion {
 export interface Applicant {
   displayId: string
   fullName: string
+  phone?: string
   answers: Record<string, unknown>
   preferences: Array<{ name: string }>
 }
@@ -55,6 +56,8 @@ export function EvaluationForm({
   scaleMax: number
   targetMinutes: number
   startedAt: string
+  interviewerName?: string
+  interviewerPhone?: string | null
 }) {
   const [scores, setScores] = useState<Record<string, number>>({})
   const [remarks, setRemarks] = useState('')
@@ -85,24 +88,28 @@ export function EvaluationForm({
     setSubmitting(true)
     setError(null)
 
-    const res = await fetch(`/api/interviews/${interviewId}/evaluations`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        scores: criteria.map((c) => ({ criterionId: c.id, score: scores[c.id] })),
-        remarks: remarks.trim() || null,
-      }),
-    })
+    try {
+      const res = await fetch(`/api/interviews/${interviewId}/evaluations`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          scores: criteria.map((c) => ({ criterionId: c.id, score: scores[c.id] })),
+          remarks: remarks.trim() || null,
+        }),
+      })
 
-    setSubmitting(false)
+      if (!res.ok) {
+        const body = await res.json().catch(() => null)
+        setError(body?.error?.message ?? 'Could not submit')
+        return
+      }
 
-    if (!res.ok) {
-      const body = await res.json()
-      setError(body?.error?.message ?? 'Could not submit')
-      return
+      setDone(true)
+    } catch (err) {
+      setError('Network error. Please check your connection and try again.')
+    } finally {
+      setSubmitting(false)
     }
-
-    setDone(true)
   }
 
   if (done) {
@@ -141,6 +148,35 @@ export function EvaluationForm({
           {elapsedMinutes} min / {targetMinutes} target
         </span>
       </header>
+
+      {(() => {
+        const appSurname = applicant.fullName.trim().split(' ').pop()?.toLowerCase()
+        const intSurname = interviewerName?.trim().split(' ').pop()?.toLowerCase()
+        const surnameMatch = appSurname && intSurname && appSurname === intSurname && appSurname.length > 3
+
+        const intDigits = interviewerPhone?.replace(/\D/g, '') || ''
+        const appDigits = applicant.phone?.replace(/\D/g, '') || ''
+        const intPrefix = intDigits.slice(0, Math.max(7, Math.floor(intDigits.length * 0.7)))
+        const appPrefix = appDigits.slice(0, Math.max(7, Math.floor(appDigits.length * 0.7)))
+        const phoneMatch = intPrefix && appPrefix && intPrefix === appPrefix && intPrefix.length >= 6
+
+        if (surnameMatch || phoneMatch) {
+          return (
+            <div className="mb-6 rounded-card border-l-4 border-state-called bg-state-called-fill p-4">
+              <div className="flex items-start gap-3">
+                <div className="flex-1">
+                  <p className="font-semibold text-state-called">Potential Conflict of Interest</p>
+                  <p className="mt-1 text-body text-state-called/90">
+                    This applicant shares your {surnameMatch ? 'surname' : 'phone prefix'}.
+                    If you know them personally, please recuse yourself.
+                  </p>
+                </div>
+              </div>
+            </div>
+          )
+        }
+        return null
+      })()}
 
       <div className="grid gap-6 lg:grid-cols-2">
         {/* Left: what the applicant said */}

@@ -74,10 +74,12 @@ try {
 
     const started = Date.now()
     try {
-      await sql.unsafe(body)
-      await sql`
-        INSERT INTO schema_migrations (filename, checksum) VALUES (${file}, ${checksum})
-      `
+      await sql.begin(async (tx) => {
+        await tx.unsafe(body)
+        await tx`
+          INSERT INTO schema_migrations (filename, checksum) VALUES (${file}, ${checksum})
+        `
+      })
       console.log(`  ok    ${file}  (${Date.now() - started}ms)`)
       count++
     } catch (err) {

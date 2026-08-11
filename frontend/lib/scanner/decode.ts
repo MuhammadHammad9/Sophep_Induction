@@ -83,8 +83,11 @@ async function createWasmDecoder(): Promise<Decoder> {
       const height = source instanceof HTMLVideoElement ? source.videoHeight : source.height
       if (!width || !height) return null
 
-      canvas.width = width
-      canvas.height = height
+      if (canvas.width !== width || canvas.height !== height) {
+        canvas.width = width
+        canvas.height = height
+      }
+      
       ctx.drawImage(source as CanvasImageSource, 0, 0, width, height)
 
       try {

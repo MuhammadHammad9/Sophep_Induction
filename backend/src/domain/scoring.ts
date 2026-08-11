@@ -238,13 +238,14 @@ export function reviewBand(
   // FIRST — a criterion floor is a substantive concern that a high rank does not answer.
   if (flags.includes('CRITERION_FLOOR')) return 'excluded'
 
-  if (rank > capacity * config.discussMultiplier) return 'below'
-
   // FR-SCR-012: any flag forces a discussion regardless of rank. A clear admit with high
   // disagreement is precisely the case a committee should look at.
   if (flags.length > 0) return 'discuss'
 
-  return rank <= capacity * config.clearMultiplier ? 'clear' : 'discuss'
+  if (rank <= capacity * config.clearMultiplier) return 'clear'
+  if (rank <= capacity * config.discussMultiplier) return 'discuss'
+  
+  return 'below'
 }
 
 function round2(n: number): number {
