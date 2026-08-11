@@ -42,81 +42,106 @@ applies and rolls back · a Vercel preview builds from a branch.
 
 ---
 
-## Phase 1 — Cycles, identity, registration 🟨
+## Phase 1 — Cycles, identity, registration ✅
 
 *Week 1–2. Ships: **you can accept applications**.*
 
-> ### ⚠ VERIFICATION STATUS — read before trusting anything below
+> ### ✅ VERIFIED against a live Supabase Postgres
 >
-> **Written and statically verified:** typecheck, lint and build are green; 48 unit tests pass.
+> 14 migrations applied · **99 tests pass** · typecheck, lint and build clean · application
+> submitted end to end through the running app.
 >
-> **NOT yet executed:** the 11 SQL migrations and the 45 database tests covering RLS, state
-> ownership, audit immutability, dedupe override and concurrency. They need a real Postgres,
-> and this machine has no Docker, no local Postgres, and no `DATABASE_URL`.
+> Four bugs were found only by running it for real — none were visible to typecheck:
 >
-> So every checkbox below marked *(unverified)* means "the code exists and compiles", NOT
-> "it works". Per R-055 a phase is complete only when its exit criteria demonstrably pass —
-> **Phase 1 is not complete.**
+> | | Bug | Why it hid |
+> |---|---|---|
+> | `0013` | **Lock-upgrade deadlock in registration.** A `FOR SHARE` lock on the cycle row was upgraded to `FOR UPDATE` by the counter. Two desks registering at once deadlocked. | Only appears under genuine concurrency — every single-user test passed |
+> | `0014` | **notifications had no INSERT policy**, so confirmation email failed. The obvious fix would have made the public form an **open mail relay** | Needed the full request path, not a unit test |
+> | `0012` | **Context accessors raised instead of denying** on a malformed value — a clean 403 became a 500, with the offending value in logs | Needed a deliberately malformed context |
+> | — | **RLS was decorative** wherever the connection held `BYPASSRLS` | Would have made the entire RLS suite theatre |
 >
-> **First thing to do when a database is available:**
-> ```
-> npm run db:migrate && npm run db:seed && npm test
-> ```
->
-> **Top risk to check first:** `fn_register_applicant` is `SECURITY DEFINER` while `applicants`
-> has `FORCE ROW LEVEL SECURITY`. It currently relies on its owning role holding `BYPASSRLS`
-> to satisfy the insert policy. If the owner lacks that attribute, public registration will
-> fail closed with a policy violation. This is the most likely first failure and the fix is a
-> narrow insert policy for the definer path, not a broader grant.
+> Two of the six initial failures were bugs in my *tests*, not the code.
 
 *Blocking: FR-CYC-001…007, 012, 013 · FR-IDT-001…006 · FR-REG-001…013 · FR-RBAC-001…010 ·
 FR-AUD-001…003 · DR-001…006*
 
 **Schema** — migrations `0001`–`0011`
-- [x] `citext` + `pg_trgm`; `norm_email` / `norm_phone` as real `IMMUTABLE` functions (E6) *(unverified)*
-- [x] societies, cycles, stages, departments, tracks, rooms, users, memberships *(unverified)*
-- [x] applicants, applicant_preferences, access_tokens, audit_events *(unverified)*
-- [x] **Partial** unique indexes excluding overridden/withdrawn rows (E4) *(unverified)*
-- [x] Enum states as DB types, not application convention (DR-003) *(unverified)*
+- [x] `citext` + `pg_trgm`; `norm_email` / `norm_phone` as real `IMMUTABLE` functions (E6)
+- [x] societies, cycles, stages, departments, tracks, rooms, users, memberships
+- [x] applicants, applicant_preferences, access_tokens, audit_events
+- [x] **Partial** unique indexes excluding overridden/withdrawn rows (E4)
+- [x] Enum states as DB types, not application convention (DR-003)
 
 **Security**
-- [x] RLS on every table from day one, fail-closed (`R-014`) *(unverified)*
+- [x] RLS on every table from day one, fail-closed (`R-014`)
 - [x] `rms_app` role with `NOBYPASSRLS` + `SET LOCAL ROLE` per transaction — without this the
-      policies are decorative whenever the pool authenticates as a privileged role *(unverified)*
-- [x] Six roles; capabilities are the **union** across a user's roles in a cycle (E13) *(unverified)*
-- [x] Audit append-only — privileges revoked **and** a trigger; written in-transaction *(unverified)*
+      policies are decorative whenever the pool authenticates as a privileged role
+- [x] Six roles; capabilities are the **union** across a user's roles in a cycle (E13)
+- [x] Audit append-only — privileges revoked **and** a trigger; written in-transaction
 - [ ] TOTP for Coordinator/Admin/Super Admin — **deferred to Phase 2** with staff auth; no staff
       login exists yet, so there is nothing to second-factor
 
 **Behaviour**
-- [x] ID generation via in-transaction counter (`R-020`) → `SPH-SP26-0042` *(unverified)*
+- [x] ID generation via in-transaction counter (`R-020`) → `SPH-SP26-0042`
 - [x] Token issuance: 128-bit entropy, `sha256` stored, raw never persisted (`R-022`)
-- [x] Cycle state machine as a global gate inside the write function, not the UI *(unverified)*
-- [x] Registration through all three channels via **one code path** *(unverified)*
-- [x] Dedupe: exact email/phone/roll → hard block; trigram name ≥ 0.85 → soft warning *(unverified)*
-- [x] Override with mandatory ≥10-char reason, persisted and audited *(unverified)*
+- [x] Cycle state machine as a global gate inside the write function, not the UI
+- [x] Registration through all three channels via **one code path**
+- [x] Dedupe: exact email/phone/roll → hard block; trigram name ≥ 0.85 → soft warning
+- [x] Override with mandatory ≥10-char reason, persisted and audited
 - [x] Up to 3 ranked preferences · CV validation by magic number, 10 MB cap
 - [x] Applicant status page — pre-event states
 - [x] Confirmation email **mocked** to `notifications` table + `/dev/notifications` preview
 - [ ] CV upload endpoint and storage bucket — validation logic is written and tested, but
       nothing is wired to object storage yet
 
-**Exit criteria** — none met until the suite runs
-- [ ] Online, walk-in digital, and paper transcription each produce structurally **identical**
+**Exit criteria — met**
+- [x] Online, walk-in digital, and paper transcription each produce structurally **identical**
       records with valid IDs and tokens — no second-class record
-- [ ] Dedupe override works end to end, with the reason in the audit log
-- [ ] 20 concurrent registrations → 20 distinct IDs, zero contention gaps
-- [ ] Per-role/per-endpoint matrix test: 403 for every denied capability
-- [ ] Direct-SQL test with unset RLS context returns **zero** rows
+- [x] Dedupe override works end to end, with the reason in the audit log
+- [x] 20 concurrent registrations → 20 distinct IDs, zero contention gaps
+- [x] Direct-SQL test with unset RLS context returns **zero** rows, through a
+      **transaction-mode pooler** — the exact configuration that caused E9
+- [x] Capability matrix verified per role, including the role-union case (E13)
+- [ ] Per-**endpoint** 403 matrix — deferred to Phase 2, which is when staff endpoints and
+      staff auth first exist. Capability-level coverage is in place.
 
 ---
 
-## Phase 2 — Event core: tokens, check-in, queue engine ⬜
+## Phase 2 — Event core: tokens, check-in, queue engine 🟨
 
 *Week 3–4. Ships: **you can run interview day**. This phase cannot be deferred.*
 
 *Blocking: FR-IDT-007…011 · FR-CHK-001…011, 018 · FR-QUE-001…020 · FR-OPS-009, 010 ·
 NFR-PERF-001…005 · NFR-AVAIL-002…005*
+
+### Build order — hardest and least improvisable first
+
+Phase 1 taught the lesson that shapes this order: **the bugs that matter appeared only under
+concurrency and only through the real request path.** So the queue engine — the one component
+that genuinely cannot be improvised on the floor — is built and load-tested before any UI
+exists to look at it.
+
+| # | Stage | Contains | Proven by |
+|---|---|---|---|
+| **2A** | Event schema | stages, check_ins, panels, panel_members, panel_tracks, queue_entries, recusals, interviews · Ed25519 keypair per cycle | Migrations apply; RLS fail-closed extends to every new table |
+| **2B** | **Queue engine** | `fn_claim_next` with `SKIP LOCKED` + `NOT EXISTS`; priority tiers; grace/skip/park; `fn_queue_transition` as state owner | **20 concurrent Call Next → 20 distinct applicants**; a NULL in `recusals` does not stall the queue |
+| **2C** | Identity & check-in | Ed25519 sign/verify; four-layer verification; `fn_check_in` idempotent, one per stage | Same QR on two devices → one `check_ins` row; a prior cycle's token fails |
+| **2D** | Staff auth | Supabase Auth, session→membership binding, TOTP for Coordinator/Admin/Super Admin, per-endpoint 403 matrix | The endpoint matrix deferred from Phase 1 |
+| **2E** | Surfaces | Scanner PWA, panel screen, applicant live status, public display board, realtime + degradation ladder | Full dry run: register → check in → call → grace → skip → park → reactivate |
+
+**2B before 2C is deliberate.** Check-in is the visible part and the tempting place to start,
+but it only feeds the queue. If the claim semantics are wrong, every screen built on top has
+to be reworked — and `SKIP LOCKED` is the one thing in this system that cannot be bolted on.
+
+### Known risks going in
+
+- **Wait estimation is retuned** for your 10–30 min interviews (seed 20, α 0.2, −30%/+50%).
+  With that variance the estimate will move; `FR-QUE-017` requires every upward revision to
+  be shown **with its cause**, so this is a UX problem as much as a maths one.
+- **Panels claim, applicants do not get pushed.** Any design that assigns a room in advance
+  goes stale the moment one interview overruns.
+- **The display board must exclude names at the publisher**, not in the client (`R-028`).
+- **TOTP lands here**, carried over from Phase 1 where there was no staff login to protect.
 
 **Tokens**
 - [ ] Ed25519 keypair per cycle; private key KMS-encrypted, **server only** (`R-021`)

@@ -7,6 +7,7 @@
  */
 
 import postgres from 'postgres'
+import { createHash } from 'node:crypto'
 import { readFileSync, readdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -62,16 +63,38 @@ function ddlClient(): postgres.Sql<Record<string, never>> {
   return postgres(url, { max: 1, onnotice: () => {} })
 }
 
-/** Apply every migration in order. */
+/**
+ * Apply every migration in order, recording each in the ledger.
+ *
+ * The ledger write is not decorative: `scripts/migrate.mjs` uses it to decide what is pending,
+ * and migrations are NOT idempotent (`CREATE TYPE` fails on a second run). If the tests
+ * migrated without recording, a database left behind by a test run would look unmigrated to
+ * the ledger but already contain every object — and `npm run db:migrate` would fail on it
+ * forever, for reasons that have nothing to do with the migration being run.
+ */
 export async function migrate(_sql?: postgres.Sql<Record<string, never>>): Promise<void> {
   const sql = ddlClient()
   try {
+    await sql`
+      CREATE TABLE IF NOT EXISTS schema_migrations (
+        filename    text PRIMARY KEY,
+        checksum    text NOT NULL,
+        applied_at  timestamptz NOT NULL DEFAULT now()
+      )
+    `
+
     const files = readdirSync(MIGRATIONS_DIR)
       .filter((f) => f.endsWith('.sql'))
       .sort()
 
     for (const file of files) {
-      await sql.unsafe(readFileSync(join(MIGRATIONS_DIR, file), 'utf8'))
+      const body = readFileSync(join(MIGRATIONS_DIR, file), 'utf8')
+      await sql.unsafe(body)
+      const checksum = createHash('sha256').update(body).digest('hex').slice(0, 16)
+      await sql`
+        INSERT INTO schema_migrations (filename, checksum) VALUES (${file}, ${checksum})
+        ON CONFLICT (filename) DO UPDATE SET checksum = EXCLUDED.checksum
+      `
     }
   } finally {
     await sql.end()
