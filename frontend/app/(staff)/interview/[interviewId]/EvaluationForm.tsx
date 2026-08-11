@@ -54,6 +54,7 @@ export function EvaluationForm({
   scaleMax,
   targetMinutes,
   startedAt,
+  recusalSuggestion,
 }: {
   interviewId: string
   applicant: Applicant
@@ -62,6 +63,14 @@ export function EvaluationForm({
   scaleMax: number
   targetMinutes: number
   startedAt: string
+  /**
+   * FR-INT-018: a human-readable conflict-of-interest prompt, or null.
+   *
+   * Computed on the SERVER. The comparison needs both parties' details, and the answer is a
+   * single sentence — sending the raw inputs to the browser to derive it would be needless
+   * exposure (NFR-PRIV-001, minimum collection).
+   */
+  recusalSuggestion: string | null
   interviewerName?: string
   interviewerPhone?: string | null
 }) {
@@ -120,7 +129,7 @@ export function EvaluationForm({
       }
 
       setDone(true)
-    } catch (err) {
+    } catch {
       setError('Network error. Please check your connection and try again.')
     } finally {
       setSubmitting(false)
@@ -164,34 +173,23 @@ export function EvaluationForm({
         </span>
       </header>
 
-      {(() => {
-        const appSurname = applicant.fullName.trim().split(' ').pop()?.toLowerCase()
-        const intSurname = interviewerName?.trim().split(' ').pop()?.toLowerCase()
-        const surnameMatch = appSurname && intSurname && appSurname === intSurname && appSurname.length > 3
+      {/* FR-INT-018: SUGGEST a recusal, never create one. Student societies are small and an
+          interviewer will meet their roommate — but a suggestion is a prompt for a human, and
+          auto-recusing would silently remove applicants from panels with no one deciding.
 
-        const intDigits = interviewerPhone?.replace(/\D/g, '') || ''
-        const appDigits = applicant.phone?.replace(/\D/g, '') || ''
-        const intPrefix = intDigits.slice(0, Math.max(7, Math.floor(intDigits.length * 0.7)))
-        const appPrefix = appDigits.slice(0, Math.max(7, Math.floor(appDigits.length * 0.7)))
-        const phoneMatch = intPrefix && appPrefix && intPrefix === appPrefix && intPrefix.length >= 6
-
-        if (surnameMatch || phoneMatch) {
-          return (
-            <div className="mb-6 rounded-card border-l-4 border-state-called bg-state-called-fill p-4">
-              <div className="flex items-start gap-3">
-                <div className="flex-1">
-                  <p className="font-semibold text-state-called">Potential Conflict of Interest</p>
-                  <p className="mt-1 text-body text-state-called/90">
-                    This applicant shares your {surnameMatch ? 'surname' : 'phone prefix'}.
-                    If you know them personally, please recuse yourself.
-                  </p>
-                </div>
-              </div>
-            </div>
-          )
-        }
-        return null
-      })()}
+          The match is computed on the SERVER: comparing a surname or phone prefix here would
+          mean shipping both parties' phone numbers into the browser bundle to answer a
+          question the server can answer alone (NFR-PRIV-001, minimum collection). */}
+      {recusalSuggestion ? (
+        <div className="mb-6 rounded-card border-l-4 border-state-called bg-state-called-fill p-4">
+          <StateBadge state="called">Possible conflict of interest</StateBadge>
+          <p className="mt-2 text-body">{recusalSuggestion}</p>
+          <p className="mt-1 text-small text-text-muted">
+            If you know this applicant personally, tell your coordinator and record a recusal
+            rather than scoring them. Nothing has been recorded automatically.
+          </p>
+        </div>
+      ) : null}
 
       <div className="grid gap-6 lg:grid-cols-2">
         {/* Left: what the applicant said */}

@@ -86,12 +86,41 @@ export default async function InterviewPage({
       SELECT full_name, phone FROM users WHERE id = ${staff.userId}::uuid
     `
 
+    // FR-INT-018: SUGGEST a recusal, never create one. Student societies are small and an
+    // interviewer will meet their roommate — but auto-recusing would silently remove people
+    // from panels with nobody deciding, so this is a prompt for a human and nothing more.
+    //
+    // Computed here rather than in the browser: the answer is one sentence, and shipping both
+    // parties' details to derive it would be needless exposure (NFR-PRIV-001).
+    const surnameOf = (name: string | null | undefined) =>
+      name?.trim().split(/\s+/).pop()?.toLowerCase() ?? ''
+    const digitsOf = (value: string | null | undefined) => (value ?? '').replace(/\D/g, '')
+
+    const applicantSurname = surnameOf(interview.full_name)
+    const interviewerSurname = surnameOf(interviewer[0]?.full_name)
+    const applicantDigits = digitsOf(interview.phone)
+    const interviewerDigits = digitsOf(interviewer[0]?.phone)
+
+    const surnameMatch =
+      applicantSurname.length > 3 && applicantSurname === interviewerSurname
+    const phoneMatch =
+      applicantDigits.length >= 7 &&
+      interviewerDigits.length >= 7 &&
+      applicantDigits.slice(0, 7) === interviewerDigits.slice(0, 7)
+
+    const recusalSuggestion = surnameMatch
+      ? 'You share a surname with this applicant.'
+      : phoneMatch
+        ? 'Your contact number closely matches this applicant’s.'
+        : null
+
     return { 
       interview, 
       criteria, 
       rubric: rubrics[0], 
       preferences, 
       target: config[0]?.target ?? 20,
+      recusalSuggestion,
       interviewer: interviewer[0] 
     }
   })
@@ -126,6 +155,7 @@ export default async function InterviewPage({
       scaleMax={data.rubric.scale_max}
       targetMinutes={data.target}
       startedAt={new Date(data.interview.started_at).toISOString()}
+      recusalSuggestion={data.recusalSuggestion}
       interviewerName={data.interviewer?.full_name}
       interviewerPhone={data.interviewer?.phone}
     />

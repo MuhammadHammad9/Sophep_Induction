@@ -7,7 +7,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./domain/*": "./src/domain/*.ts",
-    "./services/*": "./src/services/*.ts"
+    "./services/*": "./src/services/*.ts",
+    "./browser": "./src/browser.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

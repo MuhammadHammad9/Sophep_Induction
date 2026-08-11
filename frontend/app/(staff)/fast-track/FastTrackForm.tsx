@@ -59,7 +59,7 @@ export function FastTrackForm({
           ? 'Duplicate applicant detected.'
           : (body?.error?.message ?? 'Something went wrong. Please try again.'),
       )
-    } catch (err) {
+    } catch {
       setBanner('Network error. Please check your connection and try again.')
     } finally {
       setSubmitting(false)

@@ -47,10 +47,26 @@ const LIMITS: Array<{ test: (path: string) => boolean; key: string; limit: Limit
   { test: (p) => p.startsWith('/api/'), key: 'api', limit: { windowMs: 60_000, max: 600 } },
 ]
 
+/**
+ * Identify the caller for rate limiting.
+ *
+ * `NextRequest.ip` was removed in Next 16, so this reads headers directly.
+ *
+ * `x-real-ip` is preferred because the platform sets it to a single unambiguous value.
+ * `x-forwarded-for` is a CHAIN and a client can prepend entries to it, so the LAST element —
+ * the one appended by the trusted proxy nearest us — is the only part they cannot forge.
+ * Taking the first element would let anyone rotate their apparent identity by sending a
+ * different header and bypass the limit entirely.
+ *
+ * Falling back to a shared 'unknown' bucket is deliberate: if we cannot identify the caller
+ * we would rather over-limit than hand out an unlimited lane.
+ */
 function clientIp(req: NextRequest): string {
-  if (req.ip) return req.ip
+  const realIp = req.headers.get('x-real-ip')?.trim()
+  if (realIp) return realIp
+
   const forwarded = req.headers.get('x-forwarded-for')
-  return forwarded?.split(',').pop()?.trim() || req.headers.get('x-real-ip') || 'unknown'
+  return forwarded?.split(',').pop()?.trim() || 'unknown'
 }
 
 function consume(key: string, limit: Limit): { allowed: boolean; retryAfterSeconds: number } {

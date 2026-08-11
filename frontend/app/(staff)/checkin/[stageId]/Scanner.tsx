@@ -66,7 +66,7 @@ export function Scanner({
           const data = await res.json()
           setParkedCount(data.parked ?? 0)
         }
-      } catch (e) {
+      } catch {
         // silently ignore network errors for polling
       }
     }
@@ -113,7 +113,7 @@ export function Scanner({
             ? { kind: 'repeat', data: payload }
             : { kind: 'success', data: payload },
         )
-      } catch (err) {
+      } catch {
         // Fallback to offline mode
         const clientTs = (body.clientTs as string) || new Date().toISOString()
         const id = crypto.randomUUID()

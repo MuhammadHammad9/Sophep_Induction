@@ -20,10 +20,10 @@ export { generateCycleKeypair, encryptSecret, decryptSecret, encryptionKeyFromEn
 export type { CycleKeypair, ParsedQrPayload } from './domain/crypto'
 export { tokenHashB64, tokenHashHex, verifyOffline, presentFailure } from './domain/verification'
 export type { VerificationLayer, VerificationOutcome, VerificationFailure, RosterBundle, ScanPresentation } from './domain/verification'
-export { updateEwma, computeEwma, estimateWait, modelCapacity } from './domain/waitEstimate'
+export { updateEwma, computeEwma, estimateWait, modelCapacity, DEFAULT_WAIT_CONFIG } from './domain/waitEstimate'
 export type { WaitEstimateConfig, SuppressionReason, RevisionCause, WaitEstimate, WaitEstimateInput, CapacityInput, CapacityVerdict } from './domain/waitEstimate'
 export { base32Encode, base32Decode, generateTotpSecret, totpProvisioningUri, totpCode, verifyTotp, requiresMfa } from './domain/totp'
-export { computeBiases, applyShrinkage, applicantFinalScore, flagsForApplicant, reviewBand } from './domain/scoring'
+export { computeBiases, applyShrinkage, applicantFinalScore, flagsForApplicant, reviewBand, DEFAULT_SHRINKAGE_K, DEFAULT_FLAG_CONFIG, DEFAULT_BAND_CONFIG } from './domain/scoring'
 export type { EvaluationInput, InterviewerBias, AdjustedEvaluation, ScoreFlag, FlagConfig, ReviewBand, BandConfig } from './domain/scoring'
 
 // Services — database access, all RLS-context-bound

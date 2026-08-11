@@ -31,10 +31,13 @@ export async function POST(_req: Request, ctx: { params: Promise<{ token: string
 
     if (!applicantId) throw new RmsError('TOKEN_INVALID', 'Invalid link')
 
-    await withContext({ applicantId }, async (tx) => {
+    // Narrowed once here so the closure below sees a definite string.
+    const resolvedApplicantId: string = applicantId
+
+    await withContext({ applicantId: resolvedApplicantId }, async (tx) => {
       const entries = await tx<Array<{ id: string }>>`
         SELECT id FROM queue_entries
-         WHERE applicant_id = ${applicantId}::uuid AND state = 'called'
+         WHERE applicant_id = ${resolvedApplicantId}::uuid AND state = 'called'
          ORDER BY called_at DESC LIMIT 1
       `
       const entryId = entries[0]?.id

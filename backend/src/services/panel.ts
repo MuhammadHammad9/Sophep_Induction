@@ -1,4 +1,4 @@
-import type { Sql } from 'postgres'
+import type { Tx } from './db'
 
 export interface PanelSnapshot {
   status: string
@@ -8,7 +8,7 @@ export interface PanelSnapshot {
 }
 
 export async function getPanelSnapshot(
-  tx: Sql,
+  tx: Tx,
   panelId: string
 ): Promise<PanelSnapshot | null> {
   const panels = await tx<Array<{ status: string; cycle_id: string }>>`
@@ -33,7 +33,7 @@ export async function getPanelSnapshot(
             JOIN users u ON u.id = pm.interviewer_id
            WHERE pm.panel_id = ${panelId}::uuid AND pm.left_at IS NULL
         `
-      : []
+      : ([] as Array<{ full_name: string }>)
 
   return {
     status: panel.status,

@@ -12,7 +12,7 @@
  */
 
 import { useState, useId } from 'react'
-import { registrationInputSchema } from '@sophep/backend'
+import { registrationInputSchema } from '@sophep/backend/browser'
 
 export interface Department {
   id: string
@@ -105,7 +105,7 @@ export function ApplyForm({
           ? 'You have already applied with these details. Check your email for your applicant ID, or ask at the desk.'
           : (body?.error?.message ?? 'Something went wrong. Please try again.'),
       )
-    } catch (err) {
+    } catch {
       setBanner('Network error. Please check your connection and try again.')
     } finally {
       setSubmitting(false)

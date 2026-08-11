@@ -1,7 +1,7 @@
-import type { Sql } from 'postgres'
+import type { Tx } from './db'
 
 export async function submitEvaluation(
-  tx: Sql,
+  tx: Tx,
   interviewId: string,
   staffUserId: string,
   scores: Array<{ criterionId: string; score: number }>,

@@ -154,3 +154,16 @@ export async function withIdempotency<T>(
   idempotencyCache.set(key, result)
   return result
 }
+
+/**
+ * Wrap a value as a jsonb parameter.
+ *
+ * postgres.js encodes a plain JS string as a jsonb STRING SCALAR, so `${JSON.stringify(x)}`
+ * yields `"[...]"` rather than `[...]` and every jsonb_array_elements call fails with
+ * "cannot extract elements from a scalar". `sql.json()` is the correct encoder, but its type
+ * lives on `Sql` rather than `TransactionSql` — so this exists to keep call sites honest
+ * instead of scattering casts through the route handlers.
+ */
+export function jsonParam(value: unknown) {
+  return getDb().json(value as Parameters<Sql['json']>[0])
+}
