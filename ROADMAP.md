@@ -11,18 +11,25 @@ complete only when its exit criteria demonstrably pass (`R-055`).
 
 ---
 
-## Phase 0 — Foundations ⬜
+## Phase 0 — Foundations 🟨
 
 *2–3 days. No product behaviour — just the ground everything else stands on.*
 
-- [ ] `git init`, `.gitignore`, workspace `package.json` ✅
-- [ ] `CLAUDE.md`, `rules.md`, `ROADMAP.md` ✅
-- [ ] `frontend/` scaffold — Next.js App Router, TypeScript, Tailwind with §18.2 design tokens
-- [ ] `backend/` scaffold — migrations dir, domain/services/jobs, test dirs
-- [ ] Supabase project linked; migration tooling working
-- [ ] Vitest (unit + DB) and Playwright (e2e) configured
-- [ ] CI: typecheck, lint, test on every push
-- [ ] Vercel preview deployment from a branch
+**Done**
+- [x] `git init`, `.gitignore`, workspace `package.json`
+- [x] `CLAUDE.md`, `rules.md`, `ROADMAP.md`
+- [x] Directory skeleton for `frontend/` and `backend/`
+- [x] Workspace manifests, `tsconfig` for both packages, path alias `@sophep/backend`
+- [x] Tailwind config with §18.2 design tokens and §18.3 state colours
+- [x] CI workflow — typecheck, lint, test, **plus RLS and concurrency gates against a real Postgres**
+- [x] `.env.example` documenting every secret, none committed
+
+**Remaining — needs credentials or a network install**
+- [ ] `npm install` (not yet run — see OneDrive note below)
+- [ ] Next.js app entry: `layout.tsx`, `page.tsx`, `globals.css`, `next.config.ts`, PostCSS
+- [ ] Supabase project linked (`supabase link`) — needs your project ref and access token
+- [ ] Vitest + Playwright config files
+- [ ] Vercel project connected — needs your auth
 - [ ] OneDrive sync exclusions verified against a clean `npm ci` + build
 
 **Exit:** `npm run dev` serves a themed page · `npm run verify` green in CI · a trivial migration
