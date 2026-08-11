@@ -15,6 +15,7 @@ export * from './domain/crypto'
 export * from './domain/verification'
 export * from './domain/waitEstimate'
 export * from './domain/totp'
+export * from './domain/scoring'
 
 // Services — database access, all RLS-context-bound
 export * from './services/db'

@@ -190,6 +190,61 @@ Cascade for that department:
 
 ---
 
+## 6a. DECISIONS TAKEN — and how they reshape this phase
+
+These were answered before implementation began. Two of them change the shape of the phase,
+not just its configuration.
+
+| Decision | Answer |
+|---|---|
+| Walk-ins with no preferences | **Collect before review closes** — a fifth pre-flight gate |
+| Publication | **The offline meeting decides.** The system stores scores and records outcomes |
+| Email | **None for cycle one.** Status page only |
+| Dual control | Two real Super Admins: President and General Secretary |
+
+### The big one: allocation PROPOSES, the meeting DECIDES
+
+The committee will hold an on-site meeting, choose who is in, and announce it themselves.
+That is a legitimate and common way to run an induction, and the specification already
+anticipates it — *"the algorithm proposes, humans decide"* (§11.2). But it changes what the
+most important deliverable is.
+
+**It is no longer the publish pipeline. It is the review meeting screen.**
+
+Concretely:
+
+- Deferred acceptance still runs, and still matters. It gives the meeting a **defensible
+  starting point** that respects capacity and preference, computed identically every time.
+  Without it, a meeting of tired people allocates 200 applicants across 4 departments by
+  argument, and cannot answer "why them and not me" three weeks later.
+- Its output is labelled a **proposal**, everywhere, in the UI and in the data. Nothing
+  becomes an outcome because the algorithm said so.
+- Every departure from the proposal is an **override with a written reason**, creating a new
+  decision version and retaining the prior one (`FR-DEC-009`). The meeting's reasoning becomes
+  the record.
+- The **dual-control lock still applies**, and is now the moment the meeting's decisions
+  become final and visible. It is not decoration: it is what separates "we discussed this" from
+  "this is the outcome".
+
+### What this removes from Phase 4
+
+- **No email adapter.** Notices queue to the `notifications` table for the record, and nothing
+  is dispatched. `FR-NOT-002` bounce handling is meaningless without a provider and is
+  deferred with it.
+- **No publication dry run against real recipients.** The `FR-DEC-014` check — that no
+  applicant in state `selected` lacks a department — still runs, because that one catches a
+  data error rather than a delivery error.
+
+### What this ADDS
+
+- **A results export** for the committee to build their announcement posts from — selected
+  applicants per department, in decision order.
+- **The review meeting screen** gets the care that would otherwise have gone into publishing:
+  raw and adjusted side by side (`FR-SCR-014`), flags surfaced, bands pre-computed, and an
+  override that demands a reason.
+
+---
+
 ## 7. Decisions I need before building
 
 These change the design, not just the copy. Defaults are recorded but I would rather not
