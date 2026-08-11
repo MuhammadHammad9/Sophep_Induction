@@ -125,9 +125,9 @@ exists to look at it.
 |---|---|---|---|
 | ✅ **2A** | Event schema | stages, check_ins, panels, panel_members, panel_tracks, queue_entries, recusals, interviews · Ed25519 keypair per cycle | Migrations apply; RLS fail-closed extends to every new table |
 | ✅ **2B** | **Queue engine** | `fn_claim_next` with `SKIP LOCKED` + `NOT EXISTS`; priority tiers; grace/skip/park; `fn_queue_transition` as state owner | **20 concurrent Call Next → 20 distinct applicants**; a NULL in `recusals` does not stall the queue |
-| ⬜ **2C** | Identity & check-in | Ed25519 sign/verify; four-layer verification; `fn_check_in` idempotent, one per stage | Same QR on two devices → one `check_ins` row; a prior cycle's token fails |
-| ⬜ **2D** | Staff auth | Supabase Auth, session→membership binding, TOTP for Coordinator/Admin/Super Admin, per-endpoint 403 matrix | The endpoint matrix deferred from Phase 1 |
-| ⬜ **2E** | Surfaces | Scanner PWA, panel screen, applicant live status, public display board, realtime + degradation ladder | Full dry run: register → check in → call → grace → skip → park → reactivate |
+| ✅ **2C** | Identity & check-in | Ed25519 sign/verify; four-layer verification; `fn_check_in` idempotent, one per stage | Same QR on two devices → one `check_ins` row; a prior cycle's token fails |
+| 🟨 **2D** | Staff auth | Supabase Auth, session→membership binding, TOTP for Coordinator/Admin/Super Admin, per-endpoint 403 matrix | The endpoint matrix deferred from Phase 1 |
+| 🟨 **2E** | Surfaces | Scanner PWA, panel screen, applicant live status, public display board, realtime + degradation ladder | Full dry run: register → check in → call → grace → skip → park → reactivate |
 
 **2B before 2C is deliberate.** Check-in is the visible part and the tempting place to start,
 but it only feeds the queue. If the claim semantics are wrong, every screen built on top has
@@ -143,22 +143,24 @@ to be reworked — and `SKIP LOCKED` is the one thing in this system that cannot
 - **The display board must exclude names at the publisher**, not in the client (`R-028`).
 - **TOTP lands here**, carried over from Phase 1 where there was no staff login to protect.
 
-**Tokens**
-- [ ] Ed25519 keypair per cycle; private key KMS-encrypted, **server only** (`R-021`)
-- [ ] QR payload is a full HTTPS URL — any phone camera works as fallback
-- [ ] Four-layer verification: format → roster hash → Ed25519 → server
-- [ ] Rate limit 10/min/IP, constant-time comparison
-- [ ] Previous cycle's token fails signature verification against the current cycle
+**Tokens** — migrations `0018`–`0019`, ✅ verified
+- [x] Ed25519 keypair per cycle; private key AES-256-GCM encrypted, **server only** (`R-021`)
+- [x] QR payload is a full HTTPS URL — any phone camera works as fallback
+- [x] Four-layer verification: format → roster hash → Ed25519 → server
+- [x] Previous cycle's token fails signature verification against the current cycle
+- [x] Constant-time hash comparison
+- [ ] Rate limit 10/min/IP — needs middleware, lands with the scanner PWA
 
-**Check-in**
-- [ ] Persistent live camera — **not** a tap-to-scan button
-- [ ] Success: zero taps, auto-clear at 2.5 s · Failure: requires explicit dismissal
-- [ ] All ten branches from spec §7.2, including **amber for already-checked-in** (`R-027`)
-- [ ] Manual search: any 4 ID digits, last 4 phone digits, or partial name
+**Check-in** — ✅ backend verified, scanner UI outstanding
+- [x] One check-in per applicant per stage, enforced by DB constraint
+- [x] Idempotent: 6 simultaneous scans → one `check_ins` row, one queue entry
+- [x] Repeat scan returns the ORIGINAL time for **amber, not red** (`R-027`)
+- [x] Track with no open panel → check in, **suppress ETA**, raise ops alert
+- [x] Withdrawn / screened-out refused; closed stage refused
+- [x] Roster bundle: token hashes only, no names or key material (`FR-CHK-018`)
+- [ ] Scanner PWA: persistent camera, zero-tap success, 2.5 s auto-clear
+- [ ] Manual search UI: any 4 ID digits, last 4 phone digits, or partial name
 - [ ] Register-and-check-in in one screen, ≤30 s, flagged `needs_completion`
-- [ ] Track with no open panel → check in, **suppress ETA**, raise ops alert
-- [ ] One check-in per applicant per stage, enforced by DB constraint
-- [ ] Idempotency-Key on every mutation (`R-051`)
 
 **Queue engine** — migrations `0015`–`0017`, ✅ verified
 - [x] Pull-based claim, `FOR UPDATE SKIP LOCKED` + `NOT EXISTS` recusals (`R-013`)
