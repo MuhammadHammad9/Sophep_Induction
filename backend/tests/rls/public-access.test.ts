@@ -50,7 +50,7 @@ beforeAll(async () => {
       ${applicantId}::uuid, ${token.hash}::bytea,
       ${new Date(Date.now() + 86_400_000)}::timestamptz, 'test')
   `
-}, 60_000)
+}, 300_000)
 
 afterAll(async () => {
   await sql?.end()

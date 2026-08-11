@@ -47,7 +47,7 @@ beforeAll(async () => {
   `
   applicantA = a!.id
   applicantB = b!.id
-}, 60_000)
+}, 300_000)
 
 afterAll(async () => {
   await sql?.end()

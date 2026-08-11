@@ -21,7 +21,7 @@ beforeAll(async () => {
   await resetSchema(sql)
   await migrate(sql)
   fx = await seedFixture(sql)
-}, 60_000)
+}, 300_000)
 
 afterAll(async () => {
   await sql?.end()

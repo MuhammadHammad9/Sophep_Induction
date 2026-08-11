@@ -41,9 +41,22 @@ export default defineConfig({
     // look like RLS bugs and are not. Correctness over speed: the whole suite is seconds.
     fileParallelism: false,
 
-    // Schema reset plus every migration on a cold database.
-    testTimeout: 30_000,
-    hookTimeout: 60_000,
+    testTimeout: 60_000,
+
+    /**
+     * Setup cost grows with the migration count, and it is paid PER TEST FILE.
+     *
+     * Each file's beforeAll drops the schema and replays every migration. That is ~30 round
+     * trips against a database in another region, so the hook takes tens of seconds and gets
+     * slower with every migration added — it crossed the original 60 s limit at migration 27
+     * and presented as an intermittent failure rather than an obvious one.
+     *
+     * Raising the limit is a stopgap, not the fix. The real fix is a vitest globalSetup that
+     * resets and migrates ONCE per run, with each file seeding its own uniquely-scoped cycle
+     * rather than a shared fixture — tracked for Phase 5 alongside moving the suite to a
+     * database that is not across an ocean.
+     */
+    hookTimeout: 300_000,
 
     coverage: {
       provider: 'v8',

@@ -69,7 +69,7 @@ beforeAll(async () => {
   `
 
   await sql`SELECT fn_publish_rubric(${rubricId}::uuid)`
-}, 120_000)
+}, 300_000)
 
 afterAll(async () => {
   await sql?.end()

@@ -32,7 +32,7 @@ beforeAll(async () => {
       ${fx.cycleId}::uuid, 'Notify Me', 'notify@example.com', '03004440001', 'online')
   `
   applicantId = a!.id
-}, 60_000)
+}, 300_000)
 
 afterAll(async () => {
   await sql?.end()

@@ -63,7 +63,7 @@ beforeAll(async () => {
     RETURNING id
   `
   stageId = stage!.id
-}, 90_000)
+}, 300_000)
 
 afterAll(async () => {
   await sql?.end()

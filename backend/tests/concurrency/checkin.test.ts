@@ -42,7 +42,7 @@ beforeAll(async () => {
            qr_private_key_enc = ${kp.privateKeyEncrypted}::bytea
      WHERE id = ${fx.cycleId}::uuid
   `
-}, 90_000)
+}, 300_000)
 
 afterAll(async () => {
   await sql?.end()
