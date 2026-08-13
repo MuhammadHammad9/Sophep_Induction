@@ -1,25 +1,76 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from '@playwright/test'
 
-test.describe('Walk-in Registration Flow', () => {
-  test('should allow a fast-track registration', async ({ page }) => {
-    // Navigate to fast-track page (we will build this next)
-    await page.goto('/fast-track');
+/**
+ * Walk-in registration — the fast-track desk.
+ *
+ * ⚠ THIS SPEC PREVIOUSLY ASSERTED A SECURITY HOLE AS THE EXPECTED BEHAVIOUR.
+ *
+ * It navigated straight to `/fast-track`, filled the form and submitted, with no authentication
+ * anywhere in it — because at the time the page and its API route had none. That endpoint
+ * registered an applicant AND checked them into the live interview queue for anyone on the
+ * internet (audit C-1, the worst of the critical findings).
+ *
+ * A passing test for that flow is worse than no test: it is a standing statement that the
+ * unauthenticated path is correct, and the next person to "fix the failing test" would have
+ * reopened the hole to make it green again.
+ *
+ * So the unauthenticated case is now asserted as a REFUSAL, which is the actual requirement,
+ * and the authenticated flow is marked `fixme` rather than deleted — deleting it would lose the
+ * FR-CHK-010 coverage entirely and quietly reduce what this suite claims to check. It needs a
+ * signed-in staff fixture (magic link + MFA challenge), which is the next piece of work.
+ *
+ * Refs: FR-CHK-010, FR-RBAC-004, rules.md R-032, audit C-1, H-6
+ */
 
-    // Wait for the page to load
-    await expect(page.locator('h1')).toContainText('Fast-Track');
+test.describe('fast-track is staff-only', () => {
+  test('an anonymous visitor cannot reach the walk-in form', async ({ page }) => {
+    await page.goto('/fast-track')
 
-    // Fill out the required details
-    await page.fill('input[name="full_name"]', 'Test Walkin Applicant');
-    await page.fill('input[name="email"]', `walkin-${Date.now()}@example.com`);
-    await page.fill('input[name="phone"]', `03${String(Math.floor(Math.random() * 900000000 + 100000000))}`);
+    // Redirected, not rendered. The form must never be reachable without a session.
+    await expect(page).toHaveURL(/\/staff\/sign-in/)
+    await expect(page.locator('input[name="full_name"]')).toHaveCount(0)
+  })
 
-    // Submit the form
-    await page.click('button[type="submit"]');
+  test('the API refuses an anonymous walk-in registration', async ({ request }) => {
+    // The page redirect is ergonomics; this is the control (R-032). Posting directly bypasses
+    // the UI entirely, which is exactly what the original attack did.
+    const response = await request.post('/api/fast-track', {
+      data: {
+        cycleId: '00000000-0000-4000-8000-000000000000',
+        stageId: '00000000-0000-4000-8000-000000000000',
+        fullName: 'Ghost Applicant',
+        email: 'ghost@example.com',
+        phone: '03001234567',
+      },
+    })
 
-    // Expect to be checked in and redirected or see a success message
-    await expect(page.locator('.success-message')).toBeVisible({ timeout: 10000 });
-    
-    // Optionally check that needs_completion is shown or check-in is confirmed
-    await expect(page.locator('.success-message')).toContainText('Checked in');
-  });
-});
+    expect(response.status()).toBe(401)
+    const body = (await response.json()) as { error?: { code?: string } }
+    // IR-002: machine-readable, so a client can tell "sign in" from "try again" (R-057).
+    expect(body.error?.code).toBe('TOKEN_INVALID')
+  })
+})
+
+test.describe('walk-in registration, signed in', () => {
+  test.fixme(
+    true,
+    'needs a signed-in staff fixture: magic-link callback plus the MFA challenge (H-6)',
+  )
+
+  test('registers a walk-in and checks them into the queue', async ({ page }) => {
+    await page.goto('/fast-track')
+    await expect(page.locator('h1')).toContainText('Fast-Track')
+
+    await page.fill('input[name="full_name"]', 'Test Walkin Applicant')
+    await page.fill('input[name="email"]', `walkin-${Date.now()}@example.com`)
+    await page.fill(
+      'input[name="phone"]',
+      `03${String(Math.floor(Math.random() * 900000000 + 100000000))}`,
+    )
+
+    await page.click('button[type="submit"]')
+
+    await expect(page.locator('.success-message')).toBeVisible({ timeout: 10000 })
+    await expect(page.locator('.success-message')).toContainText('Checked in')
+  })
+})

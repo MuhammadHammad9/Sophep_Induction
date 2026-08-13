@@ -151,16 +151,30 @@ async function scoredApplicant(
   await sql`SELECT fn_queue_transition(${claimed!.id}::uuid, 'in_interview'::queue_state)`
 
   const payload = sql.json([{ criterion_id: criteria[0]!.id, score }])
-  await sql`SELECT fn_submit_evaluation(${interview!.id}::uuid, ${interviewerA}::uuid, ${payload}::jsonb, NULL)`
-  await sql`SELECT fn_submit_evaluation(${interview!.id}::uuid, ${interviewerB}::uuid, ${payload}::jsonb, NULL)`
+  await asUser(sql, interviewerA, (tx) => tx`SELECT fn_submit_evaluation(${interview!.id}::uuid, ${interviewerA}::uuid, ${payload}::jsonb, NULL)`)
+  await asUser(sql, interviewerB, (tx) => tx`SELECT fn_submit_evaluation(${interview!.id}::uuid, ${interviewerB}::uuid, ${payload}::jsonb, NULL)`)
 
   return applicantId
+}
+
+/**
+ * Run allocation as somebody who is allowed to.
+ *
+ * Migration 0041 put `allocation.run` on `fn_run_allocation`, and only super_admin holds it.
+ * These calls previously ran on the bare privileged connection with no bound identity, which
+ * now raises TOKEN_INVALID before any pre-flight gate is reached — so the gate assertions were
+ * passing for the wrong reason and the determinism checks were failing outright.
+ */
+async function runAllocation<T extends Record<string, unknown>>(): Promise<T[]> {
+  return asUser(sql, fx.users['super_admin']!, (tx) =>
+    tx<T[]>`SELECT * FROM fn_run_allocation(${fx.cycleId}::uuid)`,
+  )
 }
 
 describe('pre-flight gates', () => {
   it('refuses to run before shrinkage is computed (FR-DEC-002)', async () => {
     await expect(
-      sql`SELECT fn_run_allocation(${fx.cycleId}::uuid)`,
+      runAllocation(),
     ).rejects.toThrow(/PREFLIGHT_FAILED/)
   })
 
@@ -232,9 +246,11 @@ describe('allocation', () => {
   }, 300_000)
 
   it('runs and records a checksum', async () => {
-    const [run] = await sql<
-      Array<{ result_checksum: string; selected_count: number; waitlisted_count: number }>
-    >`SELECT * FROM fn_run_allocation(${fx.cycleId}::uuid)`
+    const [run] = await runAllocation<{
+      result_checksum: string
+      selected_count: number
+      waitlisted_count: number
+    }>()
 
     expect(run!.result_checksum).toMatch(/^[0-9a-f]{64}$/)
     expect(Number(run!.selected_count)).toBeGreaterThan(0)
@@ -245,14 +261,10 @@ describe('allocation', () => {
    * Critical test case 5. The E8 regression.
    */
   it('produces a BYTE-IDENTICAL result when re-run over unchanged input', async () => {
-    const [second] = await sql<Array<{ result_checksum: string }>>`
-      SELECT * FROM fn_run_allocation(${fx.cycleId}::uuid)
-    `
+    const [second] = await runAllocation<{ result_checksum: string }>()
     expect(second!.result_checksum).toBe(firstChecksum)
 
-    const [third] = await sql<Array<{ result_checksum: string }>>`
-      SELECT * FROM fn_run_allocation(${fx.cycleId}::uuid)
-    `
+    const [third] = await runAllocation<{ result_checksum: string }>()
     expect(third!.result_checksum).toBe(firstChecksum)
   })
 

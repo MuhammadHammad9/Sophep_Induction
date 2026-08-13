@@ -17,7 +17,7 @@
 
 import { redirect } from 'next/navigation'
 import { withContext } from '@sophep/backend'
-import { requireStaff } from '@/lib/auth/session'
+import { requireStaff, mfaRedirect } from '@/lib/auth/session'
 import { StateBadge } from '@/components/state/StateBadge'
 
 export const dynamic = 'force-dynamic'
@@ -75,6 +75,10 @@ export default async function OpsDashboard({
 
   const staff = await requireStaff()
   if (!staff) redirect('/staff/sign-in')
+  
+  // FR-RBAC-008: a privileged surface needs the second factor, not just a session.
+  const mfa = mfaRedirect(staff, '/ops')
+  if (mfa) redirect(mfa)
 
   const { actions, kpis } = await withContext(staff.context, async (tx) => {
     const actions = await tx<ActionRow[]>`SELECT * FROM fn_action_required(${cycleId}::uuid)`

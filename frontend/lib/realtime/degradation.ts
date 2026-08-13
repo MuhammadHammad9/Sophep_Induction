@@ -1,120 +1,181 @@
+'use client'
+
+/**
+ * The real-time degradation ladder (spec §20.2), over authenticated SSE.
+ *
+ *   Level 1  live         — the event stream is connected and delivering
+ *   Level 2  reconnecting — the stream dropped; retrying with backoff
+ *   Level 3  polling      — reconnect has failed for >10s; fetching on an interval
+ *   Level 4  offline      — polling is failing too; nothing is fresh
+ *
+ * ── WHY SSE AND NOT SUPABASE REALTIME ───────────────────────────────────────────────────
+ *
+ * The previous implementation subscribed to `postgres_changes` and set level 1 on SUBSCRIBED.
+ * It would then have delivered nothing: Realtime applies RLS using the subscriber's JWT, while
+ * every policy in this schema authorises through `fn_current_user_id()`, which reads the
+ * transaction-local `app.user_id` bound by `withContext`. A websocket has no transaction and
+ * cannot set it, so every policy denies — and the UI showed "Live" over a structurally empty
+ * feed. That is errata E11 returning, and exactly what R-026 forbids (audit H-9).
+ *
+ * `/api/live` is an ordinary authenticated request, so `requireStaff` and `withContext` apply
+ * as they do everywhere else and the SAME policies decide what a subscriber sees. One
+ * authorisation model rather than two that must agree forever.
+ *
+ * ── THE HONESTY RULES, WHICH ARE THE POINT ──────────────────────────────────────────────
+ *
+ * `lastUpdated` is the instant the SERVER READ the data, taken from the frame — never the
+ * instant this client received it, and never `new Date()` at render. Those differ by the
+ * network delay that matters most precisely when the network is worst (NFR-AVAIL-004).
+ *
+ * Level is never optimistic. It rises to 1 only once a frame has actually arrived, not when a
+ * connection opens: an open socket that has delivered nothing is not live.
+ */
+
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { createClient } from '@/lib/supabase/client'
 
 export type DegradationLevel = 1 | 2 | 3 | 4
 export type RealtimeState = 'live' | 'reconnecting' | 'polling' | 'offline'
 
 interface UseRealtimeOptions<T> {
-  channelName: string
-  event: string
-  schema?: string
-  table?: string
-  filter?: string
+  /** Query string for /api/live — e.g. `panelId=<uuid>` or `stageId=<uuid>`. */
+  scope: string
   fetchInitialData: () => Promise<T>
-  onUpdate: (payload: unknown) => void
+  onUpdate?: (data: T) => void
   pollingIntervalMs?: number
 }
 
-/**
- * Implements the Real-time Degradation Ladder (spec §20.2)
- * Level 1: Websocket live
- * Level 2: Websocket dropped, reconnecting (exponential backoff)
- * Level 3: Reconnect failing > 10s, fallback to polling
- * Level 4: Polling failing, pure offline mode
- */
+/** How long a failing reconnect is tolerated before dropping to polling (spec §20.2). */
+const RECONNECT_GRACE_MS = 10_000
+
 export function useRealtime<T>({
-  channelName,
-  event,
-  schema = 'public',
-  table,
-  filter,
+  scope,
   fetchInitialData,
   onUpdate,
   pollingIntervalMs = 5000,
 }: UseRealtimeOptions<T>) {
   const [data, setData] = useState<T | null>(null)
-  const [lastUpdated, setLastUpdated] = useState<Date>(new Date())
-  const [level, setLevel] = useState<DegradationLevel>(1)
-  const [state, setState] = useState<RealtimeState>('live')
-  
-  const supabase = createClient()
-  const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null)
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
+  const [level, setLevel] = useState<DegradationLevel>(3)
+  const [state, setState] = useState<RealtimeState>('polling')
+
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const sourceRef = useRef<EventSource | null>(null)
   const reconnectStartRef = useRef<number | null>(null)
+  const mountedRef = useRef(true)
 
   const doPoll = useCallback(async () => {
     try {
-      const freshData = await fetchInitialData()
-      setData(freshData)
+      const fresh = await fetchInitialData()
+      if (!mountedRef.current) return
+      setData(fresh)
+      // Polling reads now, so now IS the read instant — unlike a streamed frame, which
+      // carries the server's own.
       setLastUpdated(new Date())
-      if (level === 4) {
-        // Recovered network via polling
-        setLevel(3)
-        setState('polling')
-      }
+      setLevel((l) => (l === 4 ? 3 : l))
+      setState((s) => (s === 'offline' ? 'polling' : s))
     } catch {
+      if (!mountedRef.current) return
       setLevel(4)
       setState('offline')
     }
-  }, [fetchInitialData, level])
+  }, [fetchInitialData])
 
   useEffect(() => {
-    let mounted = true
+    mountedRef.current = true
 
-    // Deferred out of the effect body: doPoll setStates, and doing that synchronously on
-    // mount triggers a cascading re-render on every live surface.
+    const startPolling = () => {
+      if (pollTimerRef.current) return
+      pollTimerRef.current = setInterval(() => void doPoll(), pollingIntervalMs)
+    }
+    const stopPolling = () => {
+      if (!pollTimerRef.current) return
+      clearInterval(pollTimerRef.current)
+      pollTimerRef.current = null
+    }
+
+    // Deferred: setState synchronously inside an effect cascades a re-render on every mount
+    // of every live surface.
     void Promise.resolve().then(doPoll)
 
-    // 1. Setup Supabase Realtime Channel
-    const channel = supabase.channel(channelName)
-    channelRef.current = channel
+    let source: EventSource | null = null
+    let retryTimer: ReturnType<typeof setTimeout> | null = null
+    let attempt = 0
 
-    // supabase-js types `.on` through overloads keyed on a literal event name, and the
-    // generic postgres_changes form does not narrow from our variables. Cast through unknown
-    // once, here, rather than weakening the surrounding types.
-    const subscription = channel as unknown as {
-      on: (
-        event: string,
-        filterSpec: Record<string, unknown>,
-        handler: (payload: unknown) => void,
-      ) => { subscribe: (cb: (status: string) => void) => unknown }
+    const connect = () => {
+      if (!mountedRef.current) return
+
+      source = new EventSource(`/api/live?${scope}`)
+      sourceRef.current = source
+
+      source.addEventListener('update', (e) => {
+        if (!mountedRef.current) return
+        const frame = JSON.parse((e as MessageEvent).data) as { data: T; readAt: string }
+
+        attempt = 0
+        reconnectStartRef.current = null
+        stopPolling()
+
+        setData(frame.data)
+        // The SERVER's read instant, not ours.
+        setLastUpdated(new Date(frame.readAt))
+        setLevel(1)
+        setState('live')
+        onUpdate?.(frame.data)
+      })
+
+      source.addEventListener('heartbeat', (e) => {
+        if (!mountedRef.current) return
+        const frame = JSON.parse((e as MessageEvent).data) as { readAt: string }
+        // Nothing changed — but the data IS confirmed current as of this instant, and saying
+        // so is the difference between a quiet stream and a dead one.
+        setLastUpdated(new Date(frame.readAt))
+        setLevel(1)
+        setState('live')
+      })
+
+      // The server closes at its lifetime ceiling and asks us back; that is routine, not an
+      // error, so it must not count towards backoff.
+      source.addEventListener('reconnect', () => {
+        source?.close()
+        attempt = 0
+        connect()
+      })
+
+      source.addEventListener('error', () => {
+        source?.close()
+        if (!mountedRef.current) return
+
+        if (reconnectStartRef.current === null) {
+          reconnectStartRef.current = Date.now()
+          setLevel(2)
+          setState('reconnecting')
+        }
+
+        // Level 3: reconnect has been failing long enough that the user needs SOMETHING
+        // fresh, even if it is slower. Polling starts alongside the retries rather than
+        // replacing them.
+        if (Date.now() - reconnectStartRef.current > RECONNECT_GRACE_MS) {
+          setLevel((l) => (l === 4 ? 4 : 3))
+          setState((s) => (s === 'offline' ? 'offline' : 'polling'))
+          startPolling()
+        }
+
+        attempt += 1
+        const backoff = Math.min(1000 * 2 ** Math.min(attempt, 5), 30_000)
+        retryTimer = setTimeout(connect, backoff)
+      })
     }
 
-    subscription
-      .on('postgres_changes', { event, schema, table, filter }, (payload: unknown) => {
-        if (mounted) {
-          onUpdate(payload)
-          setLastUpdated(new Date())
-        }
-      })
-      .subscribe((status: string) => {
-        if (!mounted) return
-
-        if (status === 'SUBSCRIBED') {
-          setLevel(1)
-          setState('live')
-          reconnectStartRef.current = null
-          if (pollTimerRef.current) clearInterval(pollTimerRef.current)
-        } else if (status === 'CLOSED' || status === 'CHANNEL_ERROR') {
-          if (!reconnectStartRef.current) {
-            reconnectStartRef.current = Date.now()
-            setLevel(2)
-            setState('reconnecting')
-          } else if (Date.now() - reconnectStartRef.current > 10000 && level < 3) {
-            // Level 3: Reconnect failing over 10s -> fallback to polling
-            setLevel(3)
-            setState('polling')
-            pollTimerRef.current = setInterval(doPoll, pollingIntervalMs)
-          }
-        }
-      })
+    connect()
 
     return () => {
-      mounted = false
-      if (pollTimerRef.current) clearInterval(pollTimerRef.current)
-      supabase.removeChannel(channel)
+      mountedRef.current = false
+      if (retryTimer) clearTimeout(retryTimer)
+      stopPolling()
+      source?.close()
+      sourceRef.current = null
     }
-  }, [channelName, event, schema, table, filter, supabase, doPoll, onUpdate, pollingIntervalMs])
+  }, [scope, doPoll, onUpdate, pollingIntervalMs])
 
   return { data, lastUpdated, level, state, forcePoll: doPoll }
 }

@@ -11,7 +11,7 @@
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import type postgres from 'postgres'
-import { testDb, migrate, resetSchema, seedFixture, asUser, type Fixture } from '../helpers'
+import { testDb, migrate, resetSchema, seedFixture, asUser, asApplicant, type Fixture } from '../helpers'
 
 let sql: postgres.Sql<Record<string, never>>
 let fx: Fixture
@@ -194,11 +194,42 @@ describe('override after lock (FR-DEC-016)', () => {
   })
 })
 
+/**
+ * Issue an offer as somebody entitled to (migration 0038: `allocation.run`).
+ *
+ * The alternative caller is `fn_cascade_department`, which sets a transaction-local marker so a
+ * DECLINING applicant — who holds no capability and must not — can still release their seat
+ * onward immediately (FR-OFF-003).
+ */
+async function issueOffer<T extends Record<string, unknown> = Record<string, unknown>>(
+  applicantId: string,
+  departmentId: string,
+): Promise<T[]> {
+  return asUser(sql, president, (tx) =>
+    tx<T[]>`SELECT * FROM fn_issue_offer(${applicantId}::uuid, ${departmentId}::uuid)`,
+  )
+}
+
+/**
+ * Answer an offer AS THE APPLICANT.
+ *
+ * `fn_respond_to_offer` accepts either the applicant themselves or staff holding
+ * `applicant.edit_contact` recording a response on their behalf. Binding the applicant is the
+ * honest simulation — it is the path the status page actually uses — and it is what proves the
+ * cascade works for a caller with no staff capability at all.
+ */
+async function respondToOffer(offerId: string, accept: boolean): Promise<void> {
+  const [offer] = await sql<Array<{ applicant_id: string }>>`
+    SELECT applicant_id FROM offers WHERE id = ${offerId}::uuid
+  `
+  await asApplicant(sql, offer!.applicant_id, (tx) =>
+    tx`SELECT fn_respond_to_offer(${offerId}::uuid, ${accept})`,
+  )
+}
+
 describe('offers and the cascade (FR-OFF-001..005)', () => {
   it('issues an offer expiring in 24 hours, per the committee decision', async () => {
-    const [offer] = await sql<Array<{ expires_at: Date; state: string }>>`
-      SELECT * FROM fn_issue_offer(${acceptor}::uuid, ${events}::uuid)
-    `
+    const [offer] = await issueOffer<{ expires_at: Date; state: string }>(acceptor, events)
     const hours = (new Date(offer!.expires_at).getTime() - Date.now()) / 3_600_000
 
     expect(offer!.state).toBe('pending')
@@ -211,7 +242,7 @@ describe('offers and the cascade (FR-OFF-001..005)', () => {
     const [offer] = await sql<Array<{ id: string }>>`
       SELECT id FROM offers WHERE applicant_id = ${acceptor}::uuid
     `
-    await sql`SELECT fn_respond_to_offer(${offer!.id}::uuid, true)`
+    await respondToOffer(offer!.id, true)
 
     const [a] = await sql<Array<{ state: string }>>`
       SELECT state FROM applicants WHERE id = ${acceptor}::uuid
@@ -220,12 +251,12 @@ describe('offers and the cascade (FR-OFF-001..005)', () => {
   })
 
   it('cascades to the top-ranked waitlisted applicant on decline (FR-OFF-003)', async () => {
-    await sql`SELECT fn_issue_offer(${decliner}::uuid, ${events}::uuid)`
+    await issueOffer(decliner, events)
     const [offer] = await sql<Array<{ id: string }>>`
       SELECT id FROM offers WHERE applicant_id = ${decliner}::uuid
     `
 
-    await sql`SELECT fn_respond_to_offer(${offer!.id}::uuid, false)`
+    await respondToOffer(offer!.id, false)
 
     // Rank 1 gets the released seat, not rank 2.
     const promoted = await sql<Array<{ applicant_id: string; state: string }>>`
@@ -244,22 +275,22 @@ describe('offers and the cascade (FR-OFF-001..005)', () => {
   it('skips someone already placed elsewhere and continues (FR-OFF-004)', async () => {
     // The requirement is explicit that the cascade must not stop at an ineligible candidate:
     // it marks them and moves on. Stopping would leave a seat unfilled for no reason.
-    await sql`SELECT fn_issue_offer(${placedElsewhere}::uuid, ${tech}::uuid)`
+    await issueOffer(placedElsewhere, tech)
     const [theirOffer] = await sql<Array<{ id: string }>>`
       SELECT id FROM offers WHERE applicant_id = ${placedElsewhere}::uuid
     `
-    await sql`SELECT fn_respond_to_offer(${theirOffer!.id}::uuid, true)`
+    await respondToOffer(theirOffer!.id, true)
 
     // They now hold a TECH place; a cascade on TECH must not offer them a second one.
-    const issued = await sql<Array<{ fn_cascade_department: number }>>`
-      SELECT fn_cascade_department(${tech}::uuid)
-    `
+    const issued = await asUser(sql, president, (tx) =>
+      tx<Array<{ fn_cascade_department: number }>>`SELECT fn_cascade_department(${tech}::uuid)`,
+    )
     expect(Number(issued[0]!.fn_cascade_department)).toBe(0)
   })
 
   it('refuses to accept an expired offer', async () => {
     // Accepting late would mean the seat had already cascaded and two people hold one place.
-    await sql`SELECT fn_issue_offer(${waitlisted2}::uuid, ${events}::uuid)`
+    await issueOffer(waitlisted2, events)
     await sql`
       UPDATE offers SET expires_at = now() - interval '1 hour'
        WHERE applicant_id = ${waitlisted2}::uuid
@@ -268,9 +299,7 @@ describe('offers and the cascade (FR-OFF-001..005)', () => {
       SELECT id FROM offers WHERE applicant_id = ${waitlisted2}::uuid
     `
 
-    await expect(
-      sql`SELECT fn_respond_to_offer(${offer!.id}::uuid, true)`,
-    ).rejects.toThrow(/TOKEN_EXPIRED/)
+    await expect(respondToOffer(offer!.id, true)).rejects.toThrow(/TOKEN_EXPIRED/)
   })
 
   it('lapses an overdue offer and cascades onward', async () => {
@@ -279,9 +308,9 @@ describe('offers and the cascade (FR-OFF-001..005)', () => {
     `
     expect(before[0]!.state).toBe('pending')
 
-    const result = await sql<Array<{ fn_expire_offers: number }>>`
-      SELECT fn_expire_offers(${fx.cycleId}::uuid)
-    `
+    const result = await asUser(sql, president, (tx) =>
+      tx<Array<{ fn_expire_offers: number }>>`SELECT fn_expire_offers(${fx.cycleId}::uuid)`,
+    )
     const expired = result[0]?.fn_expire_offers
     expect(Number(expired)).toBeGreaterThanOrEqual(1)
 
@@ -309,7 +338,7 @@ describe('offers and the cascade (FR-OFF-001..005)', () => {
     // The spec's T−48h cannot exist against a 24-hour expiry — it would fire before the offer
     // was sent.
     const fresh = reminderDue
-    await sql`SELECT fn_issue_offer(${fresh}::uuid, ${events}::uuid)`
+    await issueOffer(fresh, events)
 
     const none = await sql<Array<{ offer_id: string }>>`
       SELECT offer_id FROM fn_offers_needing_reminder(${fx.cycleId}::uuid)
@@ -353,9 +382,14 @@ describe('publication and export', () => {
   })
 
   it('exports the selected list for building the announcement', async () => {
-    const rows = await sql<Array<{ department_name: string; display_id: string }>>`
-      SELECT * FROM fn_export_selected(${fx.cycleId}::uuid)
-    `
+    // Migration 0038 put `data.export` on this AND made it write an audit row before
+    // returning — R-011 lists export among the actions that must be audited, and an
+    // unattributed export has nobody to audit.
+    const rows = await asUser(sql, president, (tx) =>
+      tx<Array<{ department_name: string; display_id: string }>>`
+        SELECT * FROM fn_export_selected(${fx.cycleId}::uuid)
+      `,
+    )
     expect(rows.length).toBeGreaterThan(0)
     expect(rows[0]!.display_id).toMatch(/^SPH-/)
   })

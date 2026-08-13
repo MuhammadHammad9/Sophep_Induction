@@ -27,11 +27,11 @@ export { computeBiases, applyShrinkage, applicantFinalScore, flagsForApplicant, 
 export type { EvaluationInput, InterviewerBias, AdjustedEvaluation, ScoreFlag, FlagConfig, ReviewBand, BandConfig } from './domain/scoring'
 
 // Services — database access, all RLS-context-bound
-export { getDb, closeDb, withContext, withoutContext, asPrivileged, withIdempotency } from './services/db'
+export { getDb, closeDb, withContext, withoutContext, asPrivileged } from './services/db'
 export type { Sql, Tx, SecurityContext } from './services/db'
 export { checkDuplicates, register, searchApplicants, screenApplicant, newIdempotencyKey } from './services/registration'
 export type { DuplicateMatch, DuplicateReport, RegistrationResult } from './services/registration'
-export { enqueue, getProvider } from './services/notifications'
+export { enqueue, getProvider, substituteSecrets, notificationSecret, STATUS_URL_PLACEHOLDER } from './services/notifications'
 export type { NotificationRequest, RenderedMessage, NotificationProvider } from './services/notifications'
 export { ensureCycleKeypair, signTokenForCycle, buildRosterBundle, resolveScannedToken, checkIn } from './services/checkin'
 export type { CheckInResult, TokenResolution } from './services/checkin'
@@ -39,4 +39,15 @@ export { callNext, startInterview, expireGrace, extendGrace, reactivateParked, s
 export type { ClaimedApplicant, TrackSnapshot, ApplicantWaitView } from './services/queue'
 export { submitEvaluation } from './services/evaluation'
 export { getPanelSnapshot } from './services/panel'
+export { mfaStatus, beginEnrolment, confirmEnrolment, verifyChallenge } from './services/mfa'
+export { consumeRateLimit, enforceRateLimit, RATE_LIMITS } from './services/rateLimit'
+export type { RateLimitVerdict, RateLimitBucket } from './services/rateLimit'
+export type { MfaStatus, EnrolmentOffer } from './services/mfa'
 export type { PanelSnapshot } from './services/panel'
+export * from './services/idempotency'
+export { bulkReconcile, resolveDisplayIds, openConflicts } from './services/reconcile'
+export type { ReconcileOutcome, OpenConflict } from './services/reconcile'
+
+// Scheduled work — invoked by the cron route, never by a user request.
+export { runHourlyJobs, runNightlyJobs } from './jobs/scheduled'
+export type { JobReport } from './jobs/scheduled'

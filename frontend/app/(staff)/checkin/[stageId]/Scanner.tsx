@@ -23,6 +23,7 @@ import { StateBadge } from '@/components/state/StateBadge'
 import { useOfflineSync } from '@/lib/offline/useOfflineSync'
 import { OfflineBanner } from '@/components/scanner/OfflineBanner'
 import { addPendingOperation, getOfflineRosterHashes } from '@/lib/offline/indexeddb'
+import { syncRoster, getRosterSyncState, type RosterSyncState } from '@/lib/offline/roster'
 import { verifyOfflineQR } from '@/lib/offline/verifyQR'
 
 interface CheckInResponse {
@@ -65,7 +66,8 @@ export function Scanner({
   // The cached roster's token hashes. Loaded once and held in a ref so a scan never waits on
   // IndexedDB — the eight-second budget (NFR-PERF-003) has no room for it.
   const rosterRef = useRef<ReadonlySet<string>>(new Set())
-  const { isOffline, pendingCount } = useOfflineSync()
+  const [rosterState, setRosterState] = useState<RosterSyncState>({ syncedAt: null, count: 0 })
+  const { isOffline, pendingCount, conflictCount } = useOfflineSync()
 
   // Poll for parked applicants
   useEffect(() => {
@@ -92,15 +94,33 @@ export function Scanner({
     }
   }, [stageId, isOffline])
 
+  // Refresh the offline bundle while there is still a network to refresh it from, then load
+  // the hashes into memory. Re-run every ten minutes so applicants who registered after the
+  // morning sync are recognised at layer 2 rather than needing the Ed25519 fallback.
   useEffect(() => {
     let active = true
-    void getOfflineRosterHashes().then((hashes) => {
+
+    async function refresh() {
+      // What a previous session already cached, read first so the banner is right immediately
+      // rather than flashing "no roster" at a volunteer whose device is fine.
+      if (active) setRosterState(getRosterSyncState())
+
+      if (navigator.onLine) {
+        const state = await syncRoster(stageId)
+        if (active && state) setRosterState(state)
+      }
+      const hashes = await getOfflineRosterHashes()
       if (active) rosterRef.current = hashes
-    })
+    }
+
+    void Promise.resolve().then(refresh)
+
+    const timer = setInterval(() => void refresh(), 10 * 60 * 1000)
     return () => {
       active = false
+      clearInterval(timer)
     }
-  }, [])
+  }, [stageId])
 
   const clearResult = useCallback(() => {
     if (dismissTimer.current) clearTimeout(dismissTimer.current)
@@ -206,9 +226,12 @@ export function Scanner({
 
   return (
     <div className="flex min-h-dvh flex-col bg-[#0F172A] text-white relative">
-      {isOffline || pendingCount > 0 ? (
-        <OfflineBanner pendingCount={pendingCount} />
-      ) : null}
+      <OfflineBanner
+        isOffline={isOffline}
+        pendingCount={pendingCount}
+        conflictCount={conflictCount}
+        rosterReady={rosterState.count > 0}
+      />
 
       <header className="flex items-center justify-between px-4 py-3">
         <span className="font-medium">{deskName}</span>

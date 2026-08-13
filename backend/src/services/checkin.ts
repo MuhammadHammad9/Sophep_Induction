@@ -98,9 +98,15 @@ export async function signTokenForCycle(
 /**
  * Build the offline roster bundle.
  *
- * FR-CHK-018: token hashes and the public key ONLY. NFR-PERF-009 budgets 100 KB for 500
- * applicants — base64 hashes are 44 bytes each, so 500 costs about 22 KB, comfortably inside
- * it even with JSON overhead.
+ * Carries exactly what FR-CHK-009's three offline search modes need — identifier, name, the
+ * FINAL FOUR phone digits — plus the token hash and preferences. See `RosterBundle` and
+ * migration `0050_roster_bundle_decision.sql` for why this beats FR-CHK-018's narrower wording,
+ * and for how the concern behind that wording is answered instead.
+ *
+ * What is NOT here is the part that matters if a device is lost: no evaluations, no scores, no
+ * decisions, no full phone number, and no private key material (RSK-006).
+ *
+ * NFR-PERF-009 budgets 100 KB for 500 applicants; this shape lands near 62 KB.
  */
 export async function buildRosterBundle(
   tx: Tx,
@@ -115,20 +121,38 @@ export async function buildRosterBundle(
     throw new Error(`cycle ${cycleId} has no public key`)
   }
 
-  const rows = await tx<Array<{ token_hash_b64: string }>>`
-    SELECT token_hash_b64 FROM fn_roster_bundle(${cycleId}::uuid)
+  const rows = await tx<
+    Array<{
+      applicant_id: string
+      display_id: string
+      full_name: string
+      phone_last4: string | null
+      // Already base64URL from the function. It must stay that way: the device compares against
+      // the alphabet the verifier produces, and plain base64 differs in two characters. A
+      // mismatch would fail every layer-2 lookup silently, push every scan to the network, and
+      // only reveal itself with the WiFi off — the one moment nobody can debug it.
+      token_hash_b64: string
+      preferences: string[]
+    }>
+  >`
+    SELECT applicant_id, display_id, full_name, phone_last4, token_hash_b64, preferences
+      FROM fn_roster_bundle_v2(${cycleId}::uuid)
   `
+
+  const applicants = rows.map((r) => ({
+    applicantId: r.applicant_id,
+    displayId: r.display_id,
+    fullName: r.full_name,
+    phoneLast4: r.phone_last4 ?? '',
+    tokenHash: r.token_hash_b64,
+    preferences: r.preferences ?? [],
+  }))
 
   return {
     cycleId,
     stageId,
-    // Normalise base64 → base64url so the device compares against the same alphabet the
-    // verifier produces. A mismatch here would silently fail every layer-2 lookup and push
-    // every scan to layer 3 or the network — which is exactly the failure offline mode exists
-    // to avoid, and it would only show up with the WiFi off.
-    tokenHashes: rows.map((r) =>
-      Buffer.from(r.token_hash_b64, 'base64').toString('base64url'),
-    ),
+    applicants,
+    tokenHashes: applicants.map((a) => a.tokenHash),
     publicKey: rawPublic.toString('base64url'),
     generatedAt: new Date().toISOString(),
   }

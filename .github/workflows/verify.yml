@@ -28,6 +28,32 @@ jobs:
     env:
       DATABASE_URL: postgres://postgres:postgres@localhost:5432/sophep_test
 
+      # WITHOUT THIS, EVERY DATABASE TEST SILENTLY DOES NOT RUN.
+      #
+      # tests/helpers.ts `resetSchema` refuses to drop the schema unless this is set — a good
+      # guard, because DATABASE_URL on a developer machine points at a real Supabase project
+      # and the alternative is destroying live applicant data.
+      #
+      # But it was never set in CI either. The result: 13 of 21 test files failed on that guard
+      # and 157 tests never executed, including every RLS policy test, the 20-actor concurrency
+      # tests, and the allocation determinism goldens. The suite that protects the five
+      # invariants was decorative, and a red build looked identical to a broken guard.
+      #
+      # Safe here and only here: this Postgres is a throwaway service container that exists for
+      # the length of one job (audit H-10).
+      RMS_ALLOW_DESTRUCTIVE_TESTS: '1'
+
+      # Signing keys, notification secret parameters and TOTP secrets are encrypted at the
+      # application layer (NFR-SEC-002). A throwaway value is correct for CI — it must never be
+      # a real one, and it must be present or those paths cannot run at all.
+      #
+      # It must decode to EXACTLY 32 bytes. The first value here decoded to 34, which
+      # `encryptionKeyFromEnv` correctly rejects — so every encrypting path would have failed
+      # in CI with a confusing error. Caught by running the app end to end, not by any test.
+      APP_ENCRYPTION_KEY: c29waGVwLWNpLXRlc3Qta2V5LTMyYnl0ZXMtbG9uZyE=
+
+      NEXT_PUBLIC_APP_URL: http://localhost:3000
+
     steps:
       - uses: actions/checkout@v4
 
@@ -44,6 +70,18 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      # Applied before any test touches the database. The suite resets the schema per file and
+      # replays migrations, but the ledger has to exist first — and a migration that fails to
+      # apply should fail the build here, plainly, rather than as a confusing test error.
+      - name: Apply migrations
+        run: npm run db:migrate
+
+      # Runs against PostgreSQL 18 compiled to WebAssembly — no server, no connection string.
+      # This is the suite that proves the privilege perimeter, and it can run ANYWHERE, which
+      # is the property that stops it quietly not running (audit H-10).
+      - name: Schema and privilege perimeter (PGlite, no infrastructure)
+        run: npm run test:schema
+
       - name: Unit and integration tests
         run: npm test
 
@@ -54,3 +92,34 @@ jobs:
 
       - name: Concurrency tests (20 actors, zero duplicates)
         run: npm run test:concurrency
+
+      # E8: re-runs over unchanged input must be byte-identical, and the scoring pipeline must
+      # not reintroduce the v1 normalisation cliff. Both are golden-file comparisons, so they
+      # only mean anything if they actually execute.
+      - name: Golden tests (allocation determinism, scoring, lock and offers)
+        run: npm run test:golden
+
+      # A build that typechecks can still fail to build: route handlers, server components and
+      # middleware are only fully resolved by `next build`.
+      - name: Production build
+        run: npm run build --workspace=@sophep/frontend
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ci-placeholder-anon-key
+
+      # THE GUARD FOR THE CLASS OF DEFECT EVERY OTHER STEP ABOVE IS BLIND TO.
+      #
+      # The CSP added for audit M-1 was byte-perfect in curl, passed all 174 tests, and had
+      # broken the entire application: Next.js emits inline hydration scripts, script-src
+      # blocked them, React never hydrated, and every client component was dead — scanner,
+      # forms, offline queue. A header test reads the header. Only a browser notices that the
+      # page arrived and then did nothing.
+      #
+      # Verified to actually catch it: reintroducing the broken CSP turns these red.
+      - name: Browser security smoke (CSP, hydration, auth gates)
+        run: |
+          npx playwright install --with-deps chromium
+          npm run test:e2e
+        working-directory: frontend
+        env:
+          NEXT_PUBLIC_SITE_URL: http://localhost:3000

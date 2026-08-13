@@ -177,10 +177,10 @@ describe('submission', () => {
   it('computes a weighted score normalised to 0–100 (FR-SCR-001)', async () => {
     const { interviewId } = await stagedInterview('Perfect Scores')
 
-    const [evaluation] = await sql<Array<{ raw_score: string }>>`
+    const [evaluation] = await asUser(sql, interviewerA, (tx) => tx<Array<{ raw_score: string }>>`
       SELECT raw_score FROM fn_submit_evaluation(
         ${interviewId}::uuid, ${interviewerA}::uuid, ${scores([5, 5, 5])}::jsonb, 'Excellent')
-    `
+    `)
     // All maxima → 100.
     expect(Number(evaluation!.raw_score)).toBe(100)
   })
@@ -188,10 +188,10 @@ describe('submission', () => {
   it('normalises by the SCALE, so the minimum is 0 rather than 20', async () => {
     const { interviewId } = await stagedInterview('Minimum Scores')
 
-    const [evaluation] = await sql<Array<{ raw_score: string }>>`
+    const [evaluation] = await asUser(sql, interviewerA, (tx) => tx<Array<{ raw_score: string }>>`
       SELECT raw_score FROM fn_submit_evaluation(
         ${interviewId}::uuid, ${interviewerA}::uuid, ${scores([1, 1, 1])}::jsonb, NULL)
-    `
+    `)
     // Dividing by max alone would give a 1–5 rubric a floor of 20%, making every applicant
     // look better than they scored.
     expect(Number(evaluation!.raw_score)).toBe(0)
@@ -202,10 +202,10 @@ describe('submission', () => {
 
     const partial = sql.json([{ criterion_id: criteria[0]!.id, score: 4 }])
     await expect(
-      sql`
+      asUser(sql, interviewerA, (tx) => tx`
         SELECT fn_submit_evaluation(
           ${interviewId}::uuid, ${interviewerA}::uuid, ${partial}::jsonb, NULL)
-      `,
+      `),
     ).rejects.toThrow(/every criterion must be scored/)
   })
 
@@ -213,25 +213,25 @@ describe('submission', () => {
     const { interviewId } = await stagedInterview('Out Of Range')
 
     await expect(
-      sql`
+      asUser(sql, interviewerA, (tx) => tx`
         SELECT fn_submit_evaluation(
           ${interviewId}::uuid, ${interviewerA}::uuid, ${scores([9, 3, 3])}::jsonb, NULL)
-      `,
+      `),
     ).rejects.toThrow(/outside the rubric scale/)
   })
 
   it('refuses a second submission from the same interviewer (FR-INT-008)', async () => {
     const { interviewId } = await stagedInterview('Double Submit')
-    await sql`
+    await asUser(sql, interviewerA, (tx) => tx`
       SELECT fn_submit_evaluation(
         ${interviewId}::uuid, ${interviewerA}::uuid, ${scores([4, 4, 4])}::jsonb, NULL)
-    `
+    `)
 
     await expect(
-      sql`
+      asUser(sql, interviewerA, (tx) => tx`
         SELECT fn_submit_evaluation(
           ${interviewId}::uuid, ${interviewerA}::uuid, ${scores([5, 5, 5])}::jsonb, NULL)
-      `,
+      `),
     ).rejects.toThrow(/already submitted/)
   })
 
@@ -239,11 +239,13 @@ describe('submission', () => {
     const { interviewId } = await stagedInterview('Wrong Panel')
 
     await expect(
-      sql`
+      asUser(sql, fx.users['volunteer']!, (tx) => tx`
         SELECT fn_submit_evaluation(
           ${interviewId}::uuid, ${fx.users['volunteer']!}::uuid, ${scores([3, 3, 3])}::jsonb, NULL)
-      `,
-    ).rejects.toThrow(/not a member of this panel/)
+      `),
+    // Migration 0041 tightened both the check and its wording: membership is now CURRENT
+    // membership, so someone removed from a panel mid-event cannot still submit for it.
+    ).rejects.toThrow(/RECUSAL_CONFLICT: not a current member of this panel/)
   })
 })
 
@@ -251,10 +253,10 @@ describe('the completion gate (FR-INT-011, E10)', () => {
   it('holds the interview at awaiting_evaluations until BOTH members submit', async () => {
     const { interviewId } = await stagedInterview('One Of Two')
 
-    await sql`
+    await asUser(sql, interviewerA, (tx) => tx`
       SELECT fn_submit_evaluation(
         ${interviewId}::uuid, ${interviewerA}::uuid, ${scores([4, 4, 4])}::jsonb, NULL)
-    `
+    `)
 
     const [afterFirst] = await sql<Array<{ status: string; panel_id: string }>>`
       SELECT status, panel_id FROM interviews WHERE id = ${interviewId}::uuid
@@ -271,10 +273,10 @@ describe('the completion gate (FR-INT-011, E10)', () => {
       sql`SELECT fn_claim_next(${afterFirst!.panel_id}::uuid)`,
     ).rejects.toThrow(/PANEL_AWAITING_EVALUATIONS/)
 
-    await sql`
+    await asUser(sql, interviewerB, (tx) => tx`
       SELECT fn_submit_evaluation(
         ${interviewId}::uuid, ${interviewerB}::uuid, ${scores([3, 3, 3])}::jsonb, NULL)
-    `
+    `)
 
     const [afterSecond] = await sql<Array<{ status: string }>>`
       SELECT status FROM interviews WHERE id = ${interviewId}::uuid
@@ -294,8 +296,8 @@ describe('the completion gate (FR-INT-011, E10)', () => {
     const before = await sql<Array<{ id: string }>>`SELECT id FROM service_observations`
 
     const { interviewId } = await stagedInterview('Timed Interview')
-    await sql`SELECT fn_submit_evaluation(${interviewId}::uuid, ${interviewerA}::uuid, ${scores([4, 4, 4])}::jsonb, NULL)`
-    await sql`SELECT fn_submit_evaluation(${interviewId}::uuid, ${interviewerB}::uuid, ${scores([4, 4, 4])}::jsonb, NULL)`
+    await asUser(sql, interviewerA, (tx) => tx`SELECT fn_submit_evaluation(${interviewId}::uuid, ${interviewerA}::uuid, ${scores([4, 4, 4])}::jsonb, NULL)`)
+    await asUser(sql, interviewerB, (tx) => tx`SELECT fn_submit_evaluation(${interviewId}::uuid, ${interviewerB}::uuid, ${scores([4, 4, 4])}::jsonb, NULL)`)
 
     const after = await sql<Array<{ id: string }>>`SELECT id FROM service_observations`
     expect(after.length).toBe(before.length + 1)
@@ -305,10 +307,10 @@ describe('the completion gate (FR-INT-011, E10)', () => {
     // FR-INT-012. Without this escape hatch, an interviewer going home at 16:00 blocks their
     // panel for the rest of the day.
     const { interviewId } = await stagedInterview('Waived Evaluation')
-    await sql`
+    await asUser(sql, interviewerA, (tx) => tx`
       SELECT fn_submit_evaluation(
         ${interviewId}::uuid, ${interviewerA}::uuid, ${scores([4, 4, 4])}::jsonb, NULL)
-    `
+    `)
 
     // Waived AS the coordinator. A waiver must be attributable — an unattributed one is
     // unauditable, and before migration 0026 it was silently ignored by the completion gate,
@@ -349,10 +351,10 @@ describe('the completion gate (FR-INT-011, E10)', () => {
   it('refuses to waive someone who already submitted', async () => {
     // Waiving a submitted evaluation would discard a real score.
     const { interviewId } = await stagedInterview('Already Submitted Waiver')
-    await sql`
+    await asUser(sql, interviewerA, (tx) => tx`
       SELECT fn_submit_evaluation(
         ${interviewId}::uuid, ${interviewerA}::uuid, ${scores([4, 4, 4])}::jsonb, NULL)
-    `
+    `)
 
     await expect(
       asUser(sql, fx.users['coordinator']!, (tx) =>
@@ -372,8 +374,8 @@ describe('blind evaluation (FR-INT-004)', () => {
   it('hides one interviewer’s evaluation from the other', async () => {
     const { interviewId } = await stagedInterview('Blind Test')
 
-    await sql`SELECT fn_submit_evaluation(${interviewId}::uuid, ${interviewerA}::uuid, ${scores([5, 5, 5])}::jsonb, 'A remarks')`
-    await sql`SELECT fn_submit_evaluation(${interviewId}::uuid, ${interviewerB}::uuid, ${scores([1, 1, 1])}::jsonb, 'B remarks')`
+    await asUser(sql, interviewerA, (tx) => tx`SELECT fn_submit_evaluation(${interviewId}::uuid, ${interviewerA}::uuid, ${scores([5, 5, 5])}::jsonb, 'A remarks')`)
+    await asUser(sql, interviewerB, (tx) => tx`SELECT fn_submit_evaluation(${interviewId}::uuid, ${interviewerB}::uuid, ${scores([1, 1, 1])}::jsonb, 'B remarks')`)
 
     const seenByA = await asUser(sql, interviewerA, async (tx) => {
       return tx<Array<{ interviewer_id: string }>>`
@@ -387,8 +389,8 @@ describe('blind evaluation (FR-INT-004)', () => {
 
   it('hides the other interviewer’s individual scores too', async () => {
     const { interviewId } = await stagedInterview('Blind Scores')
-    await sql`SELECT fn_submit_evaluation(${interviewId}::uuid, ${interviewerA}::uuid, ${scores([5, 5, 5])}::jsonb, NULL)`
-    await sql`SELECT fn_submit_evaluation(${interviewId}::uuid, ${interviewerB}::uuid, ${scores([2, 2, 2])}::jsonb, NULL)`
+    await asUser(sql, interviewerA, (tx) => tx`SELECT fn_submit_evaluation(${interviewId}::uuid, ${interviewerA}::uuid, ${scores([5, 5, 5])}::jsonb, NULL)`)
+    await asUser(sql, interviewerB, (tx) => tx`SELECT fn_submit_evaluation(${interviewId}::uuid, ${interviewerB}::uuid, ${scores([2, 2, 2])}::jsonb, NULL)`)
 
     const items = await asUser(sql, interviewerA, async (tx) => {
       return tx<Array<{ score: number }>>`
@@ -423,10 +425,10 @@ describe('blind evaluation (FR-INT-004)', () => {
 describe('revisions (FR-INT-009)', () => {
   it('creates a new revision and RETAINS the original', async () => {
     const { interviewId } = await stagedInterview('Revised Evaluation')
-    const [original] = await sql<Array<{ id: string; raw_score: string }>>`
+    const [original] = await asUser(sql, interviewerA, (tx) => tx<Array<{ id: string; raw_score: string }>>`
       SELECT id, raw_score FROM fn_submit_evaluation(
         ${interviewId}::uuid, ${interviewerA}::uuid, ${scores([2, 2, 2])}::jsonb, NULL)
-    `
+    `)
 
     await sql`
       SELECT fn_revise_evaluation(${original!.id}::uuid, ${scores([4, 4, 4])}::jsonb,
@@ -447,10 +449,10 @@ describe('revisions (FR-INT-009)', () => {
 
   it('demands a written reason', async () => {
     const { interviewId } = await stagedInterview('Unreasoned Revision')
-    const [evaluation] = await sql<Array<{ id: string }>>`
+    const [evaluation] = await asUser(sql, interviewerA, (tx) => tx<Array<{ id: string }>>`
       SELECT id FROM fn_submit_evaluation(
         ${interviewId}::uuid, ${interviewerA}::uuid, ${scores([3, 3, 3])}::jsonb, NULL)
-    `
+    `)
 
     await expect(
       sql`SELECT fn_revise_evaluation(${evaluation!.id}::uuid, ${scores([5, 5, 5])}::jsonb, '')`,
@@ -477,10 +479,10 @@ describe('the stage-close gate (FR-CYC-008..010, E15)', () => {
 
   it('lists outstanding evaluations by the interviewer who owes them', async () => {
     const { interviewId } = await stagedInterview('Half Evaluated')
-    await sql`
+    await asUser(sql, interviewerA, (tx) => tx`
       SELECT fn_submit_evaluation(
         ${interviewId}::uuid, ${interviewerA}::uuid, ${scores([4, 4, 4])}::jsonb, NULL)
-    `
+    `)
 
     const blocks = await sql<Array<{ kind: string; label: string }>>`
       SELECT * FROM fn_stage_close_preflight(${stageId}::uuid)

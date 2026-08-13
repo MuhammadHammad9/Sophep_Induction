@@ -1,12 +1,26 @@
-// Channels definition from spec §20.1
-// "Real-time is a LAYER, not a foundation. It keeps the UI fresh; it is never the source of truth. Postgres is."
+// Channel scopes, from spec §20.1.
+// "Real-time is a LAYER, not a foundation. It keeps the UI fresh; it is never the source of
+//  truth. Postgres is."
+//
+// These are now SCOPE STRINGS for `/api/live` (an authenticated SSE endpoint), not Supabase
+// Realtime topics. The audit (H-9) found the Realtime path could not work and lied about it:
+// `postgres_changes` applies RLS using the subscriber's JWT, while every policy here
+// authorises through `fn_current_user_id()`, which reads the transaction-local `app.user_id`
+// bound by withContext. A websocket has no transaction, so every policy denied — and the UI
+// rendered "Live" over a feed that was structurally empty (errata E11, R-026).
+//
+// Broadcast was not an alternative: its topics are joinable by anyone who knows the string,
+// and these strings derive from the cycle id, which is printed in the public /display URL on
+// the hall TV.
+//
+// SSE makes each subscription an ordinary authenticated request, so `requireStaff` and
+// `withContext` apply and the SAME policies decide what a subscriber sees — one authorisation
+// model instead of two that must agree forever.
+//
+// The display board keeps its own guarantee independently: `fn_display_board` excludes names
+// and scores AT THE PUBLISHER (R-028), so that channel is incapable of carrying them whatever
+// the transport.
 
-/**
- * 1. applicant:{token_hash}
- * Subscribers: that applicant only
- * Payload: own state, position, ETA, room
- * Filter: RLS, single row
- */
 export function getApplicantChannel(tokenHash: string) {
   return `applicant:${tokenHash}`
 }

@@ -36,6 +36,37 @@ export default defineConfig({
   test: {
     include: ['tests/**/*.test.ts'],
 
+    /**
+     * `npm test` runs everything that can run ANYWHERE. The three suites excluded here need a
+     * real Postgres server AND destroy its schema, so `tests/helpers.ts` refuses to run them
+     * without `RMS_ALLOW_DESTRUCTIVE_TESTS=1` — a guard that exists because DATABASE_URL on a
+     * developer machine points at a live Supabase project.
+     *
+     * They were previously included by default, so `npm test` and therefore `npm run verify`
+     * failed on every machine that had not opted in. A verify step that is always red is a
+     * verify step nobody reads, and it is how 157 tests came to be permanently skipped without
+     * anyone noticing (audit H-10).
+     *
+     * They have not been dropped — they run explicitly via `test:rls`, `test:concurrency` and
+     * `test:golden`, and CI runs all three on every push. `tests/schema` stays IN, because
+     * PGlite needs no server and proves the privilege perimeter everywhere.
+     */
+    exclude: [
+      '**/node_modules/**',
+      // Gated on the opt-in rather than unconditional. `exclude` beats a positional filter in
+      // vitest, so an unconditional list also made `test:rls`, `test:concurrency` and
+      // `test:golden` match ZERO files — the three scripts that exist to run these suites, and
+      // the ones CI calls. They exited 1 with "No test files found", which reads as a broken
+      // runner rather than as the suites being skipped.
+      //
+      // With the flag set, everything runs. Without it, `npm test` still goes green on a
+      // machine whose DATABASE_URL points at a live project, which is the property worth
+      // keeping (audit H-10).
+      ...(process.env['RMS_ALLOW_DESTRUCTIVE_TESTS'] === '1'
+        ? []
+        : ['tests/rls/**', 'tests/concurrency/**', 'tests/golden/**']),
+    ],
+
     // The RLS and concurrency suites each reset the schema in beforeAll. Running files in
     // parallel would have them tearing down each other's fixtures, producing failures that
     // look like RLS bugs and are not. Correctness over speed: the whole suite is seconds.

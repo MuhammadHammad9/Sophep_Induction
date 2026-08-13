@@ -10,7 +10,7 @@
  */
 
 import { NextResponse } from 'next/server'
-import { withContext, searchApplicants } from '@sophep/backend'
+import { withContext, searchApplicants, applicantSearchSchema } from '@sophep/backend'
 import { requireStaff, hasCapability, unauthorized, forbidden } from '@/lib/auth/session'
 
 export async function GET(req: Request) {
@@ -22,14 +22,25 @@ export async function GET(req: Request) {
   }
 
   const url = new URL(req.url)
-  const q = url.searchParams.get('q')?.trim() ?? ''
+
+  // `applicantSearchSchema` already encodes these rules and was going unused: the route
+  // hand-rolled the minimum length and never bounded the maximum, so an unbounded string
+  // reached the trigram search (audit M-13). Validating through the schema keeps the client
+  // and the server agreeing about what a search is, which is the same reason the registration
+  // form shares its schema.
+  const parsed = applicantSearchSchema.safeParse({
+    cycleId: staff.cycleId,
+    q: url.searchParams.get('q') ?? '',
+    limit: Number(url.searchParams.get('limit') ?? 20),
+  })
 
   // Below two characters the result set is most of the cohort, which is slower to scan than
-  // retyping and encourages picking the wrong person under pressure.
-  if (q.length < 2) return NextResponse.json([])
+  // retyping and encourages picking the wrong person under pressure. An empty array rather
+  // than a 400: the volunteer is mid-word, not in error.
+  if (!parsed.success) return NextResponse.json([])
 
   const results = await withContext(staff.context, (tx) =>
-    searchApplicants(tx, staff.cycleId, q, 20),
+    searchApplicants(tx, staff.cycleId, parsed.data.q, parsed.data.limit),
   )
 
   return NextResponse.json(results)

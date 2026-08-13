@@ -52,6 +52,47 @@ try {
     .filter((f) => f.endsWith('.sql'))
     .sort()
 
+  // ── Two files sharing a number ────────────────────────────────────────────────────────
+  //
+  // Two people (or two agents) working at once both take "the next number" and both are right.
+  // Nothing then complains: the ledger keys on filename, so both apply, in whatever order the
+  // rest of the name happens to sort. That order is silent, arbitrary, and load-bearing the
+  // moment one of them grants a privilege the other revokes.
+  //
+  // Caught here, before applying anything, because renumbering after the fact means editing the
+  // ledger by hand.
+  const byNumber = new Map()
+  for (const file of files) {
+    const number = file.slice(0, 4)
+    byNumber.set(number, [...(byNumber.get(number) ?? []), file])
+  }
+  const collisions = [...byNumber.entries()].filter(([, group]) => group.length > 1)
+
+  if (collisions.length > 0) {
+    for (const [number, group] of collisions) {
+      console.error(`  CLASH ${number} is used by ${group.length} files: ${group.join(', ')}`)
+    }
+    console.error(
+      '\nRenumber the later one(s) so the apply order is stated rather than incidental.',
+    )
+    process.exit(1)
+  }
+
+  // ── A ledger row whose file has vanished ──────────────────────────────────────────────
+  //
+  // The mirror image of drift: the database still carries a migration that source control no
+  // longer describes. Rebuilding from scratch would produce a DIFFERENT schema from the one
+  // running, and nothing would say so.
+  const orphans = [...applied.keys()].filter((f) => !files.includes(f))
+  if (orphans.length > 0) {
+    for (const file of orphans) console.error(`  ORPHAN ${file} is applied but no longer exists`)
+    console.error(
+      '\nRestore the file, or remove its ledger row deliberately. A schema nobody can rebuild ' +
+        'is not versioned (R-053, NFR-MAIN-002).',
+    )
+    process.exit(1)
+  }
+
   let count = 0
   let drift = 0
 

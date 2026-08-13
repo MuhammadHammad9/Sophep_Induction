@@ -33,23 +33,50 @@ export type VerificationFailure =
   | 'unknown_token'      // well-formed, unsigned, not in the roster
   | 'bad_signature'      // signed, but not by this cycle's key
 
+/** One person as a check-in device knows them offline. */
+export interface RosterApplicant {
+  applicantId: string
+  displayId: string
+  fullName: string
+  /**
+   * The FINAL FOUR digits of the phone number, never the number.
+   *
+   * FR-CHK-009 asks for the final four; carrying more would be a contact detail leaving the
+   * building on a volunteer's personal phone for no requirement (RSK-006).
+   */
+  phoneLast4: string
+  /** base64url sha256(token). */
+  tokenHash: string
+  /** Department codes in preference order — read by a volunteer, joined by nothing. */
+  preferences: string[]
+}
+
 /**
  * The offline roster bundle.
  *
- * FR-CHK-018 is emphatic about what this may contain: token hashes and the cycle public key
- * ONLY. No evaluations, no scores, no decisions, no private key material. A device lost at the
- * venue then leaks a set of opaque hashes and a public key — neither of which permits forging
- * anything or learning anything about a person.
+ * ⚠ DECIDED CONFLICT — full reasoning in migration `0050_roster_bundle_decision.sql`.
  *
- * NFR-PERF-009 budgets 100 KB for 500 applicants, which hex hashes alone would blow; hashes
- * are therefore carried base64url (43 chars each).
+ * TRD `FR-CHK-018` says "token hashes and the cycle public key only". spec.json
+ * `offline.roster_bundle.contents` lists identity and preferences as well. Built to the JSON —
+ * not merely because it wins on precedence, but because the TRD contradicts itself: `FR-CHK-009`
+ * mandates manual search by partial name and by the final four phone digits, and `FR-CHK-012`
+ * mandates that check-in work for eight hours with no network. A hashes-only bundle makes a
+ * mandatory, demonstration-verified requirement unimplementable exactly when it matters.
+ *
+ * What FR-CHK-018 was protecting is kept by other means: this carries the MINIMUM that
+ * FR-CHK-009's three search modes need — note `phoneLast4`, not the phone number — nothing
+ * evaluative ever, and the device expires it after 16 hours (`indexeddb.ts`).
+ *
+ * NFR-PERF-009 budgets 100 KB for 500 applicants. Hashes are base64url (43 chars) rather than
+ * hex, and preferences are short codes rather than uuids, which keeps 500 entries near 60 KB.
  */
 export interface RosterBundle {
   cycleId: string
   stageId: string
+  applicants: RosterApplicant[]
   /** base64url sha256(token) — a SET, so membership is O(1) on a device holding 500 entries. */
   tokenHashes: string[]
-  /** base64url raw Ed25519 public key. */
+  /** base64url raw Ed25519 PUBLIC key. The private half never leaves the server (E1, R-021). */
   publicKey: string
   generatedAt: string
 }

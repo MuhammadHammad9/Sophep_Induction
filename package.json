@@ -17,6 +17,8 @@
     "test": "npm run test --workspaces --if-present",
     "test:rls": "npm run test:rls --workspace=@sophep/backend",
     "test:concurrency": "npm run test:concurrency --workspace=@sophep/backend",
+    "test:golden": "npm run test:golden --workspace=@sophep/backend",
+    "test:schema": "npm run test:schema --workspace=@sophep/backend",
     "test:e2e": "npm run test:e2e --workspace=@sophep/frontend",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present",

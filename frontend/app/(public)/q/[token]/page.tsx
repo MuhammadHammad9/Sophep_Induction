@@ -14,7 +14,7 @@
  */
 
 import { notFound } from 'next/navigation'
-import { hashToken, withContext } from '@sophep/backend'
+import { hashToken, parseQrPayload, withContext } from '@sophep/backend'
 import { StatusBand, type UiState } from '@/components/state/StateBadge'
 import { LiveStatus } from './LiveStatus'
 
@@ -38,12 +38,19 @@ interface StatusView {
  * only, and enforces revocation and expiry itself (migration 0011).
  */
 async function loadStatus(rawToken: string): Promise<StatusView | null> {
-  // The QR payload is `<token>.<signature>` from Phase 2 onward. Strip any signature so a
-  // Phase 2 QR still resolves here.
-  const token = rawToken.split('.')[0] ?? ''
-  if (!token) return null
+  // The QR payload is `<token>.<signature>` from Phase 2 onward, and parseQrPayload is the one
+  // definition of that shape — it strips the signature, tolerates the full URL form a phone
+  // camera hands over, and enforces the 22-character base64url token format.
+  //
+  // This used to be `rawToken.split('.')[0]`, which accepted anything at all and passed it to
+  // hashToken. Harmless in itself (an arbitrary string hashes to a value no row matches), but
+  // it meant the page and `/api/q/:token/status` disagreed about what a token IS — and two
+  // definitions of a credential's format is how one of them eventually gets it wrong
+  // (audit M-14).
+  const parsed = parseQrPayload(rawToken)
+  if (!parsed) return null
 
-  const tokenHash = hashToken(token)
+  const tokenHash = hashToken(parsed.token)
 
   return withContext({}, async (tx) => {
     const rows = await tx<

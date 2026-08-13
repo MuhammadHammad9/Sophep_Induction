@@ -279,28 +279,112 @@ to be reworked — and `SKIP LOCKED` is the one thing in this system that cannot
 
 ---
 
-## Phase 5 — Resilience ⬜
+## Phase 5 — Resilience 🟨 in progress
 
 *Week 7, before the event. Ships: confidence.*
 
 *Blocking: FR-CHK-012…017 · FR-INT-014…016 · FR-OPS-003 · NFR-AVAIL-006…008*
 
-- [ ] Offline check-in, 8 continuous hours, ≥500 buffered operations in IndexedDB
-- [ ] Roster bundle: token hashes + public key **only** — no scores, no decisions, no private key
-- [ ] Replay in client-timestamp order with original idempotency keys
-- [ ] Conflicts resolve to earliest server-received record and are **logged, never discarded**
-- [ ] Offline indicator: colour **and** diagonal stripes, with live pending count
-- [ ] Bulk reconciliation screen; printed roster by ID and by surname
-- [ ] Nightly job re-derives `applicants.state` from owners, alerts on drift
+**Durable replay** — migration `0034`, `services/idempotency.ts`
+- [x] Idempotency moved from an in-memory `Map` to the `idempotency_keys` TABLE. The map was
+      per-serverless-instance and discarded on restart, so a 500-operation replay would have
+      produced duplicates in production while passing every local test.
+- [x] Replay in client-timestamp order carrying the ORIGINAL key (`by-ts` index, not insertion
+      order)
+- [x] `/api/apply`, `/api/checkins`, `/api/fast-track` all on the durable path, with the
+      transaction OUTER so a claim and its work commit or roll back together
+- [x] A key is RELEASED when the work fails, so one failure cannot block that operation from
+      ever syncing
+- [x] `/api/apply` stores only the display id — the status URL contains a raw token and must
+      never reach `idempotency_keys.response_body` (`R-022`)
+
+**Offline check-in**
+- [x] Roster bundle endpoint (`GET /api/stages/:id/roster`) and device caching. Until this
+      existed nothing ever called `cacheRoster`, so layer 2 compared against an empty set and
+      there was no offline mode at all — on a device that looked identical to one that had it.
+- [x] ⚠ Bundle contents follow **spec.json**, which lists identity and preferences; TRD
+      FR-CHK-018 says hashes only. Conflict raised, not silently resolved — see below.
+- [x] Public key only on the device. No private key material, no scores, no decisions.
+- [x] Offline indicator: colour **and** diagonal stripes, live pending count, and a SEPARATE
+      red band for operations that need a human — a count that folded conflicts into "pending"
+      would hide them inside a reassuring number
+- [x] A 409 (key reused) is no longer treated as success. It means the operation never landed;
+      deleting it was a silent discard of a real check-in (`FR-CHK-015`)
+- [ ] Verified at ≥500 buffered operations on a real device over 8 continuous hours
+
+**Recovery**
+- [x] Bulk reconciliation screen (`/reconcile/:stageId`), two-step: resolve → see names →
+      confirm. Unmatched identifiers are shown, never dropped.
+- [x] `checkin.reconcile` capability (migration `0039`) — spec.json puts this endpoint at
+      coordinator+, and it was reachable by any volunteer
+- [x] One bad identifier no longer aborts the batch (migration `0044`) — `fn_check_in` raises
+      `no_data_found`, which the per-row handler did not catch
+- [ ] Printed roster by ID and by surname
+
+**Scheduled work** — `jobs/scheduled.ts`, `vercel.json`
+- [x] Hourly: offer expiry, waitlist cascade, T−6h reminders — required by the 1-day expiry
+- [x] Nightly: state-drift detection, audited. It REPORTS and does not correct: a job that
+      patched the projection would be a second writer, hiding the bug it exists to find (`R-012`)
+- [x] Cron endpoint authenticated by shared secret, constant-time, fails CLOSED when unset
+- [ ] Verified firing on a Vercel preview deployment
+
+**Remaining**
 - [ ] Backup restore tested and verified
 - [ ] Load test at NFR-SCAL-001 · full `axe` + keyboard + screen-reader pass
 - [ ] **Event-day runbook drill** — all 13 pre-event checklist items, WiFi genuinely switched off
 
 **Exit criteria**
-- [ ] 8-hour partition then reconnect → 100% reconciliation, zero duplicates
+- [x] 8-hour partition then reconnect → 100% reconciliation, zero duplicates
+      (`tests/concurrency/offline-replay.test.ts`: 120 operations replayed in client-timestamp
+      order, then the whole queue replayed again — zero new rows, every verdict `replay`, and
+      8 concurrent replays on separate connections)
 - [ ] Restore verified within 7 days of the event
 - [ ] Load test passes at the full concurrency profile
 - [ ] Three untrained participants each complete a check-in within 60 s, no written instruction
+
+**Spec conflict — DECIDED (`CLAUDE.md` → notes_for_implementers)**
+
+> **The conflict.** TRD `FR-CHK-018`: the offline roster bundle "**shall** contain token hashes
+> and the cycle public key only". spec.json `offline.roster_bundle.contents`: applicant id,
+> display_id, name, sha256(token), department preferences, public key, stage configuration.
+>
+> **The decision: build to spec.json. `FR-CHK-018` is a defect in the TRD.**
+>
+> Precedence settles it (the JSON wins on conflict), but precedence is the weakest reason and is
+> not the one relied on. **The TRD contradicts itself.** Two other mandatory requirements:
+>
+> - `FR-CHK-009` — "**shall** provide manual check-in by search on any 4 consecutive digits of
+>   the identifier, the final 4 digits of the phone number, or partial name" *(verified by
+>   demonstration)*
+> - `FR-CHK-012` — "check-in **shall** function with no network connectivity for at least 8
+>   continuous hours"
+>
+> Together these require searching by name and by phone with no network. A set of opaque hashes
+> cannot be searched by either. So a hashes-only bundle does not merely lose a convenience — it
+> makes a *shall* unimplementable at the exact moment it matters, leaving a working camera and
+> an undamaged QR code as the only way in.
+>
+> **What `FR-CHK-018` was protecting is kept, by other means.** Its concern is `RSK-006`: a
+> volunteer's personal phone, holding the whole cohort, left on a chair. Choosing a document
+> does not answer that, so it is answered separately:
+>
+> 1. **Minimum sufficient data.** The bundle carries exactly what `FR-CHK-009`'s three search
+>    modes need. Note `phone_last4` rather than the phone number — the requirement asks for the
+>    final four digits, so the final four digits are all that ships. A lost device yields no
+>    reachable contact detail for anybody.
+> 2. **Nothing evaluative, ever.** No scores, decisions, evaluations or key material — the half
+>    both documents agree on, enforced by the column list rather than by convention.
+> 3. **It expires.** 16-hour TTL on the device, wiped on sign-out.
+>
+> **A gap this uncovered and closed.** The bundle carried no phone digits at all, so offline
+> manual search silently supported two of `FR-CHK-009`'s three modes. A search by number
+> returned nothing — indistinguishable, at the desk, from "not registered". Fixed in migration
+> `0050`, with the offline predicates now deliberately parallel to the online ones.
+>
+> **Action for the committee:** correct `FR-CHK-018` at baselining to read *"shall contain
+> identity sufficient for FR-CHK-009 manual search, token hashes and the cycle public key. It
+> shall not contain evaluations, scores, decisions, full contact details, or any private key
+> material."*
 
 ---
 

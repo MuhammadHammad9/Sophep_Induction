@@ -10,6 +10,7 @@
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import type postgres from 'postgres'
+import { randomUUID } from 'node:crypto'
 import { testDb, migrate, resetSchema, seedFixture, type Fixture } from '../helpers'
 import { generateToken, hashToken } from '../../src/domain/identity'
 import { generateCycleKeypair, signToken } from '../../src/domain/crypto'
@@ -214,11 +215,26 @@ describe('token resolution at the desk', () => {
   })
 })
 
+/**
+ * Read the roster bundle the way a check-in device does — as a signed-in volunteer.
+ *
+ * Migration 0038 added `fn_require_capability(cycle, 'checkin.perform')` inside the function,
+ * so an unbound privileged call now raises TOKEN_INVALID. That is the point of the guard: the
+ * bundle is every applicant's identity, and reaching it must require being somebody.
+ */
+async function asVolunteer<T>(fn: (tx: postgres.TransactionSql<Record<string, never>>) => Promise<T>): Promise<T> {
+  return sql.begin(async (tx) => {
+    await tx`SET LOCAL ROLE rms_app`
+    await tx`SELECT set_config('app.user_id', ${fx.users['volunteer']!}, true)`
+    return fn(tx as postgres.TransactionSql<Record<string, never>>)
+  }) as Promise<T>
+}
+
 describe('offline roster bundle (FR-CHK-018)', () => {
   it('contains token hashes and nothing else', async () => {
-    const rows = await sql<Array<Record<string, unknown>>>`
+    const rows = await asVolunteer((tx) => tx<Array<Record<string, unknown>>>`
       SELECT * FROM fn_roster_bundle(${fx.cycleId}::uuid) LIMIT 1
-    `
+    `)
 
     // A device lost at the venue must leak a set of opaque hashes — no names, no states,
     // no scores, and certainly no key material.
@@ -231,9 +247,9 @@ describe('offline roster bundle (FR-CHK-018)', () => {
       SELECT fn_application_transition(${id}::uuid, 'withdrawn'::applicant_state, 'withdrew')
     `
 
-    const rows = await sql<Array<{ token_hash_b64: string }>>`
+    const rows = await asVolunteer((tx) => tx<Array<{ token_hash_b64: string }>>`
       SELECT token_hash_b64 FROM fn_roster_bundle(${fx.cycleId}::uuid)
-    `
+    `)
     const hashes = new Set(
       rows.map((r) => Buffer.from(r.token_hash_b64, 'base64').toString('base64url')),
     )
@@ -244,9 +260,9 @@ describe('offline roster bundle (FR-CHK-018)', () => {
   it('lets a device verify a real token offline, and reject a forged one', async () => {
     const { rawToken } = await makeApplicant('Offline Verified')
 
-    const rows = await sql<Array<{ token_hash_b64: string }>>`
+    const rows = await asVolunteer((tx) => tx<Array<{ token_hash_b64: string }>>`
       SELECT token_hash_b64 FROM fn_roster_bundle(${fx.cycleId}::uuid)
-    `
+    `)
     const roster = new Set(
       rows.map((r) => Buffer.from(r.token_hash_b64, 'base64').toString('base64url')),
     )
@@ -268,5 +284,122 @@ describe('offline roster bundle (FR-CHK-018)', () => {
     expect(
       verifyOffline(`${forged.raw}.${forgedSig}`, roster, rawPublic).valid,
     ).toBe(false)
+  })
+})
+
+/**
+ * The bundle a device actually caches (spec.json offline.roster_bundle).
+ *
+ * ⚠ The two specs disagree here and the disagreement is recorded rather than resolved silently:
+ * TRD FR-CHK-018 says "token hashes and the cycle public key only", while spec.json lists
+ * identity and preferences too. The JSON wins on precedence, and it is the only self-consistent
+ * reading — the same object requires manual search to work against the cached roster, which a
+ * set of opaque hashes cannot support.
+ *
+ * What these tests pin down is the half both documents agree on, which is also the half that
+ * matters if a device is left on a chair.
+ */
+describe('offline roster bundle v2 (spec.json offline.roster_bundle)', () => {
+  it('carries identity and preferences, and NOTHING evaluative', async () => {
+    await makeApplicant('Bundle Shape')
+
+    const rows = await asVolunteer((tx) => tx<Array<Record<string, unknown>>>`
+      SELECT * FROM fn_roster_bundle_v2(${fx.cycleId}::uuid) LIMIT 1
+    `)
+
+    // Asserted as an exact set, not a subset. A subset assertion would still pass on the day
+    // somebody adds `final_score` to the query, which is the failure this test exists for.
+    expect(Object.keys(rows[0]!).sort()).toEqual(
+      [
+        'applicant_id',
+        'display_id',
+        'full_name',
+        'phone_last4',
+        'preferences',
+        'token_hash_b64',
+      ].sort(),
+    )
+  })
+
+  it('emits base64URL hashes, matching what a device computes from a scan', async () => {
+    const { rawToken } = await makeApplicant('Bundle Alphabet')
+
+    const rows = await asVolunteer((tx) => tx<Array<{ token_hash_b64: string }>>`
+      SELECT token_hash_b64 FROM fn_roster_bundle_v2(${fx.cycleId}::uuid)
+    `)
+    const hashes = new Set(rows.map((r) => r.token_hash_b64))
+
+    // Plain base64 differs from base64url in exactly two characters, so a mismatch here would
+    // fail roughly one lookup in eight — silently, offline, at the desk.
+    expect(hashes.has(tokenHashB64(rawToken))).toBe(true)
+    expect(rows.every((r) => !/[+/=]/.test(r.token_hash_b64))).toBe(true)
+  })
+
+  it('carries the final FOUR phone digits and not the number', async () => {
+    // FR-CHK-009 asks for the final four, so the final four is the whole budget. A lost device
+    // must not hand over a reachable contact detail for every applicant in the cycle (RSK-006).
+    const rows = await asVolunteer((tx) => tx<Array<{ phone_last4: string }>>`
+      SELECT phone_last4 FROM fn_roster_bundle_v2(${fx.cycleId}::uuid)
+    `)
+
+    expect(rows.length).toBeGreaterThan(0)
+    expect(rows.every((r) => /^\d{4}$/.test(r.phone_last4))).toBe(true)
+  })
+
+  it('matches the digits the ONLINE search compares against', async () => {
+    // Both paths must agree on which digits count. If they disagree, a volunteer who searched
+    // successfully while online gets nothing for the same query offline — and has no way to
+    // tell that from the applicant not existing.
+    const { id } = await makeApplicant('Phone Parity')
+
+    const [expected] = await sql<Array<{ last4: string }>>`
+      SELECT right(phone_norm, 4) AS last4 FROM applicants WHERE id = ${id}::uuid
+    `
+    const rows = await asVolunteer((tx) => tx<Array<{ applicant_id: string; phone_last4: string }>>`
+      SELECT applicant_id, phone_last4 FROM fn_roster_bundle_v2(${fx.cycleId}::uuid)
+    `)
+
+    const mine = rows.find((r) => r.applicant_id === id)
+    expect(mine!.phone_last4).toBe(expected!.last4)
+  })
+
+  it('refuses a caller with no bound identity', async () => {
+    // Fail-closed (R-014): the bundle is the whole cohort's names.
+    await expect(
+      sql`SELECT * FROM fn_roster_bundle_v2(${fx.cycleId}::uuid)`,
+    ).rejects.toThrow(/TOKEN_INVALID/)
+  })
+})
+
+describe('bulk reconcile authority (FR-CHK-017)', () => {
+  async function reconcileAs(role: string, applicantIds: string[]) {
+    return sql.begin(async (tx) => {
+      await tx`SET LOCAL ROLE rms_app`
+      await tx`SELECT set_config('app.user_id', ${fx.users[role]!}, true)`
+      return tx<Array<{ outcome: string }>>`
+        SELECT outcome FROM fn_bulk_reconcile(${stageId}::uuid, ${applicantIds}::uuid[])
+      `
+    })
+  }
+
+  it('refuses a volunteer', async () => {
+    const { id } = await makeApplicant('Reconcile Denied')
+
+    // spec.json puts this endpoint at "coordinator+". Every other check-in path has an
+    // applicant standing in front of somebody; this one takes a typed list, so a mistake — or
+    // a bored volunteer — is invisible until the queue fills with people who are not present.
+    await expect(reconcileAs('volunteer', [id])).rejects.toThrow(/DUAL_CONTROL_REQUIRED/)
+  })
+
+  it('allows a coordinator, and reports one row per input including failures', async () => {
+    const { id } = await makeApplicant('Reconcile Allowed')
+
+    const rows = await reconcileAs('coordinator', [id, randomUUID()])
+
+    // Two in, two out. A bulk operation that returned only its successes would leave the
+    // Coordinator diffing two lists by hand to find who is missing.
+    expect(rows).toHaveLength(2)
+    expect(rows[0]!.outcome).toBe('checked_in')
+    expect(rows[1]!.outcome).toMatch(/^error/)
   })
 })

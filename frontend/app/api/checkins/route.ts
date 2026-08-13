@@ -69,11 +69,24 @@ export async function POST(req: Request) {
 
   const input = parsed.data
 
-  const idempotencyKey = req.headers.get('Idempotency-Key')
+  // The device generates this when it QUEUES the operation, so the same key survives the whole
+  // journey from a phone that has been offline for hours to the server (FR-CHK-014). The header
+  // wins; `clientRequestId` in the body is the offline queue's own copy of it.
+  const idempotencyKey = req.headers.get('Idempotency-Key') ?? input.clientRequestId ?? null
 
   try {
-    const result = await withIdempotency(idempotencyKey, async () => {
-      return await withContext(staff.context, async (tx) => {
+    // Transaction OUTER, idempotency inner: the claim and the check-in commit or roll back as
+    // one, so a key can never be left claimed for work that did not happen.
+    const { value: result, replayed } = await withContext(staff.context, async (tx) =>
+      withIdempotency(
+        tx,
+        {
+          key: idempotencyKey,
+          endpoint: '/api/checkins',
+          body: input,
+          statusCode: 201,
+        },
+        async () => {
         let applicantId = input.applicantId
 
         if (!applicantId && input.scanned) {
@@ -101,13 +114,18 @@ export async function POST(req: Request) {
           ...(input.clientTs ? { clientTs: new Date(input.clientTs) } : {}),
           ...(input.clientRequestId ? { clientRequestId: input.clientRequestId } : {}),
         })
-      })
-    })
+        },
+      ),
+    )
 
     // 200 rather than 201 for a repeat: nothing was created, and the client renders this
-
-    // AMBER, not red (FR-CHK-006, R-027).
-    return NextResponse.json(result, { status: result.outcome === 'already' ? 200 : 201 })
+    // AMBER, not red (FR-CHK-006, R-027). A replay is the same case seen from the network's
+    // side — the operation landed, so the volunteer is told it is done, not that it failed.
+    const already = replayed || (result as { outcome?: string }).outcome === 'already'
+    return NextResponse.json(
+      { ...(result as object), ...(replayed ? { replayed: true } : {}) },
+      { status: already ? 200 : 201 },
+    )
   } catch (err) {
     if (err instanceof RmsError) {
       return NextResponse.json(err.toBody(), { status: err.status })
