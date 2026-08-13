@@ -7,7 +7,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./domain/*": "./src/domain/*.ts",
-    "./services/*": "./src/services/*.ts"
+    "./services/*": "./src/services/*.ts",
+    "./browser": "./src/browser.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
@@ -15,10 +16,13 @@
     "test:rls": "vitest run tests/rls",
     "test:concurrency": "vitest run tests/concurrency",
     "test:golden": "vitest run tests/golden",
-    "db:migrate": "supabase db push",
+    "test:schema": "vitest run tests/schema",
+    "db:preflight": "node --env-file-if-exists=../.env scripts/preflight.mjs",
+    "db:migrate": "node --env-file-if-exists=../.env scripts/migrate.mjs",
     "db:reset": "supabase db reset",
-    "db:seed": "supabase db reset --no-seed && node scripts/seed.mjs",
-    "db:diff": "supabase db diff -f"
+    "db:seed": "node --env-file-if-exists=../.env scripts/seed.mjs",
+    "db:diff": "supabase db diff -f",
+    "db:reset-test": "node --env-file-if-exists=../.env scripts/reset-test-db.mjs"
   },
   "dependencies": {
     "@noble/ed25519": "^2.2.3",
@@ -28,6 +32,7 @@
     "zod": "^3.24.1"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.4",
     "@types/node": "^22.10.5",
     "supabase": "^2.2.1",
     "typescript": "^5.7.3",

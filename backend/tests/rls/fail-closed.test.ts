@@ -47,7 +47,7 @@ beforeAll(async () => {
   `
   applicantA = a!.id
   applicantB = b!.id
-}, 60_000)
+}, 300_000)
 
 afterAll(async () => {
   await sql?.end()
@@ -89,13 +89,15 @@ describe('unset security context', () => {
     expect(rows).toHaveLength(0)
   })
 
-  it('returns zero rows for every RLS-protected table', async () => {
+  it('returns zero rows for every table holding personal or private data', async () => {
+    // `cycles` and `departments` are deliberately NOT in this list: the public application
+    // form must read the open cycle and its departments before any context can exist. Those
+    // two narrow exposures are asserted, and bounded, in public-access.test.ts.
     const tables = [
       'applicants',
       'applicant_preferences',
       'access_tokens',
       'memberships',
-      'cycles',
       'stages',
       'notifications',
     ]

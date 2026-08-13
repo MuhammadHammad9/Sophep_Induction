@@ -12,6 +12,7 @@
  */
 
 import { useState, useId } from 'react'
+import { registrationInputSchema } from '@sophep/backend/browser'
 
 export interface Department {
   id: string
@@ -54,40 +55,61 @@ export function ApplyForm({
 
     const data = new FormData(e.currentTarget)
 
-    const res = await fetch('/api/apply', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        cycleId,
-        fullName: data.get('fullName'),
-        email: data.get('email'),
-        phone: data.get('phone'),
-        rollNumber: data.get('rollNumber') || null,
-        preferences,
-        answers: {},
-      }),
-    })
+    const payload = {
+      cycleId,
+      fullName: data.get('fullName'),
+      email: data.get('email'),
+      phone: data.get('phone'),
+      rollNumber: data.get('rollNumber') || null,
+      preferences,
+      answers: {},
+      source: 'online',
+    }
 
-    const body = await res.json()
-    setSubmitting(false)
-
-    if (res.ok) {
-      setResult(body)
+    const parsed = registrationInputSchema.safeParse(payload)
+    if (!parsed.success) {
+      const fieldErrors: FieldErrors = {}
+      for (const issue of parsed.error.issues) {
+        const key = issue.path[0] as string
+        if (key && !fieldErrors[key]) fieldErrors[key] = issue.message
+      }
+      setErrors(fieldErrors)
+      setBanner('Please correct the highlighted fields.')
+      setSubmitting(false)
       return
     }
 
-    if (body?.error?.detail && typeof body.error.detail === 'object') {
-      setErrors(body.error.detail as FieldErrors)
-    }
+    try {
+      const res = await fetch('/api/apply', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
 
-    // DUPLICATE_APPLICANT gets a specific message. Telling someone "you have already applied"
-    // and pointing them at their existing record is far more useful than a generic failure,
-    // and it is the most common non-happy path on this form.
-    setBanner(
-      body?.error?.code === 'DUPLICATE_APPLICANT'
-        ? 'You have already applied with these details. Check your email for your applicant ID, or ask at the desk.'
-        : (body?.error?.message ?? 'Something went wrong. Please try again.'),
-    )
+      const body = await res.json().catch(() => null)
+      
+      if (res.ok) {
+        setResult(body)
+        return
+      }
+
+      if (body?.error?.detail && typeof body.error.detail === 'object') {
+        setErrors(body.error.detail as FieldErrors)
+      }
+
+      // DUPLICATE_APPLICANT gets a specific message. Telling someone "you have already applied"
+      // and pointing them at their existing record is far more useful than a generic failure,
+      // and it is the most common non-happy path on this form.
+      setBanner(
+        body?.error?.code === 'DUPLICATE_APPLICANT'
+          ? 'You have already applied with these details. Check your email for your applicant ID, or ask at the desk.'
+          : (body?.error?.message ?? 'Something went wrong. Please try again.'),
+      )
+    } catch {
+      setBanner('Network error. Please check your connection and try again.')
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   if (result) {
@@ -190,6 +212,13 @@ export function ApplyForm({
                   onClick={() => togglePreference(d.id)}
                   disabled={full}
                   aria-pressed={selected}
+                  aria-label={
+                    selected
+                      ? `Remove ${d.name} (currently preference ${rank + 1})`
+                      : full
+                        ? `Limit reached, cannot select ${d.name}`
+                        : `Select ${d.name} as preference ${preferences.length + 1}`
+                  }
                   className={`flex w-full touch-target items-center justify-between rounded-control border px-4 py-3 text-left ${
                     selected
                       ? 'border-primary bg-state-live-fill'

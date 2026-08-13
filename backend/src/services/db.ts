@@ -36,7 +36,14 @@ export function getDb(connectionString?: string): Sql {
   }
 
   client = postgres(url, {
-    max: 10,
+    // Sized for the event, not for a dev laptop. Twenty panels polling snapshots, thirty
+    // interviewers, ~200 applicants polling their status every 5s and the display board every
+    // 10s all land here. At max: 10 the pool — not Postgres — was the binding constraint, and
+    // the symptom would be requests queueing until the 15s statement timeout fired.
+    //
+    // Overridable because the right number depends on the Supabase tier's own connection
+    // ceiling, which is an ops decision rather than a code one (R-050).
+    max: Number(process.env['DATABASE_POOL_MAX'] ?? 40),
     idle_timeout: 20,
     connection: {
       // A runaway query must never hold a connection through the whole event. This is a
@@ -75,6 +82,8 @@ export interface SecurityContext {
   actorRole?: string
   actorLabel?: string
   clientIp?: string
+  /** Comma-separated list of capabilities to avoid RLS subquery overhead (M-07). */
+  capabilities?: string
 }
 
 /**
@@ -95,11 +104,21 @@ export async function withContext<T>(
     // `SET LOCAL` reverts at COMMIT, so the connection returns to the pool unchanged.
     await tx`SET LOCAL ROLE rms_app`
 
-    await tx`SELECT set_config('app.user_id',      ${ctx.userId ?? ''},      true)`
-    await tx`SELECT set_config('app.applicant_id', ${ctx.applicantId ?? ''}, true)`
-    await tx`SELECT set_config('app.actor_role',   ${ctx.actorRole ?? ''},   true)`
-    await tx`SELECT set_config('app.actor_label',  ${ctx.actorLabel ?? ''},  true)`
-    await tx`SELECT set_config('app.client_ip',    ${ctx.clientIp ?? ''},    true)`
+    // One round-trip, not six.
+    //
+    // These ran as six separate awaited statements. Every request on every hot path — status
+    // polls, scans, claims — paid seven network round-trips before doing any work at all, so
+    // the fixed overhead dominated the actual query. set_config returns a value, so they
+    // compose into a single SELECT with identical semantics: still transaction-local
+    // (is_local = true), still evaluated before `fn` runs, still fail-closed when unset.
+    await tx`
+      SELECT set_config('app.user_id',      ${ctx.userId ?? ''},       true),
+             set_config('app.applicant_id', ${ctx.applicantId ?? ''},  true),
+             set_config('app.actor_role',   ${ctx.actorRole ?? ''},    true),
+             set_config('app.actor_label',  ${ctx.actorLabel ?? ''},   true),
+             set_config('app.client_ip',    ${ctx.clientIp ?? ''},     true),
+             set_config('app.capabilities', ${ctx.capabilities ?? ''}, true)
+    `
 
     return fn(tx as Tx)
   }) as Promise<T>
@@ -131,3 +150,15 @@ export async function withoutContext<T>(fn: (tx: Tx) => Promise<T>, sql: Sql = g
 export async function asPrivileged<T>(fn: (tx: Tx) => Promise<T>, sql: Sql = getDb()): Promise<T> {
   return sql.begin(async (tx) => fn(tx as Tx)) as Promise<T>
 }
+
+/**
+ * Idempotency lives in `./idempotency`, backed by the `idempotency_keys` TABLE.
+ *
+ * An in-memory implementation used to live here. It cannot work on serverless: each instance
+ * has its own memory and it is discarded on restart, so a device replaying an offline queue
+ * hits several instances, none of which recognises a replay, and duplicates are created. It
+ * passed locally because one dev server is one instance.
+ *
+ * Deleted rather than deprecated — an importable version is one an autocomplete away from
+ * being used again (FR-CHK-014, FR-OPS-004).
+ */

@@ -54,7 +54,7 @@ CREATE TABLE cycles (
   -- against the current one. The PRIVATE key is app-layer encrypted and NEVER transmitted
   -- to any client device (E1, FR-IDT-007, NFR-SEC-003, rules.md R-021).
   -- Populated in Phase 2; nullable until then.
-  qr_public_key       bytea,
+  qr_public_key_jwk   jsonb,
   qr_private_key_enc  bytea,
 
   -- Everything tunable lives here so a new cycle never needs a deployment
