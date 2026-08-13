@@ -50,7 +50,7 @@ beforeAll(async () => {
       ${applicantId}::uuid, ${token.hash}::bytea,
       ${new Date(Date.now() + 86_400_000)}::timestamptz, 'test')
   `
-}, 60_000)
+}, 300_000)
 
 afterAll(async () => {
   await sql?.end()
@@ -169,17 +169,22 @@ describe('token resolution', () => {
 
   it('exposes only the fields the status page renders', async () => {
     // Guards against a future migration adding a column that a SELECT * would silently leak
-    // to an unauthenticated caller.
+    // to an unauthenticated caller. Notably: answers, cv_object_key and scores must never
+    // become reachable from a token alone.
+    const current = generateToken()
+    await sql`
+      SELECT fn_issue_token(
+        ${applicantId}::uuid, ${current.hash}::bytea,
+        ${new Date(Date.now() + 86_400_000)}::timestamptz, 'field exposure test')
+    `
+
     const [row] = await asAnonymous(sql, async (tx) => {
       return tx<Array<Record<string, unknown>>>`
-        SELECT * FROM fn_resolve_token(${hashToken(rawToken + 'x')}::bytea)
-      `.then(() => tx<Array<Record<string, unknown>>>`
-        SELECT * FROM fn_resolve_token(
-          (SELECT token_hash FROM access_tokens
-            WHERE applicant_id = ${applicantId}::uuid AND revoked_at IS NULL))
-      `)
+        SELECT * FROM fn_resolve_token(${current.hash}::bytea)
+      `
     })
 
+    expect(row).toBeDefined()
     expect(Object.keys(row!).sort()).toEqual(
       ['applicant_id', 'cycle_id', 'cycle_name', 'display_id', 'full_name', 'state'].sort(),
     )

@@ -12,7 +12,7 @@
  */
 
 import { notFound } from 'next/navigation'
-import { withContext, getAdapter } from '@sophep/backend'
+import { withContext, getProvider } from '@sophep/backend'
 
 export const dynamic = 'force-dynamic'
 
@@ -38,7 +38,7 @@ export default async function NotificationsPreview() {
     `
   })
 
-  const adapter = getAdapter()
+  const adapter = getProvider()
 
   return (
     <div className="mx-auto max-w-3xl p-6">

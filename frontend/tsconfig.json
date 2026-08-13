@@ -32,6 +32,9 @@
       ],
       "@sophep/backend/*": [
         "../backend/src/*"
+      ],
+      "@sophep/backend/browser": [
+        "../backend/src/browser.ts"
       ]
     }
   },

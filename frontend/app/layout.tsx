@@ -5,6 +5,11 @@ export const metadata: Metadata = {
   title: 'SOPHEP Induction',
   description: 'SOPHEP recruitment and induction management',
   robots: { index: false, follow: false },
+  // NFR-COMP-003: the check-in app is installable as a PWA. Installing it matters beyond
+  // convenience — a home-screen app keeps the camera permission and survives a volunteer
+  // accidentally closing the browser mid-queue.
+  manifest: '/manifest.webmanifest',
+  appleWebApp: { capable: true, title: 'Check-in', statusBarStyle: 'black-translucent' },
 }
 
 export const viewport: Viewport = {
@@ -19,6 +24,21 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
+      <head>
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `
+              if ('serviceWorker' in navigator) {
+                window.addEventListener('load', function() {
+                  navigator.serviceWorker.register('/sw.js').catch(function(err) {
+                    console.error('ServiceWorker registration failed: ', err);
+                  });
+                });
+              }
+            `,
+          }}
+        />
+      </head>
       <body>
         <a
           href="#main"

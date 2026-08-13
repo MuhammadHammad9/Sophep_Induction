@@ -158,6 +158,18 @@ INSERT INTO role_capabilities (role, capability, scope) VALUES
 CREATE OR REPLACE FUNCTION fn_has_capability(p_cycle_id uuid, p_capability text)
 RETURNS boolean
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  -- Derived from MEMBERSHIPS, never from anything the caller supplies.
+  --
+  -- A "fast path" that reads an application-set GUC (app.capabilities) was tried and removed:
+  -- set_config is available to the application role, so any caller could assert
+  -- 'evaluation.view_all,results.lock' and be granted both — with no membership and no user id
+  -- at all. That is a total authorisation bypass, and it is invisible to the existing tests
+  -- because they bind app.user_id rather than asserting capabilities.
+  --
+  -- The boundary must not depend on the application telling the truth (FR-RBAC-004): that is
+  -- the entire reason it lives in the database. If this subquery is ever a measured
+  -- bottleneck, the answer is an index or a materialised membership view — never trusting the
+  -- caller's claim about who they are.
   SELECT EXISTS (
     SELECT 1
       FROM memberships m

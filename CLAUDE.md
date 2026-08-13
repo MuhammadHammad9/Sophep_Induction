@@ -29,6 +29,12 @@ The JSON's own `notes_for_implementers` is explicit: if the JSON and the prose d
 **a defect in the JSON — raise it, do not silently pick one**. Requirements using *shall* are
 mandatory; absence is a defect.
 
+**Conflicts decided so far** (full reasoning in `ROADMAP.md`, not repeated here):
+
+| Conflict | Decision |
+|---|---|
+| `FR-CHK-018` (roster bundle = hashes only) vs spec.json `offline.roster_bundle` | **Build to spec.json.** `FR-CHK-018` also contradicts `FR-CHK-009` + `FR-CHK-012` *within the TRD* — a hashes-only bundle makes offline manual search unimplementable. Recorded as a TRD defect for baselining. Migration `0050`. |
+
 ⚠️ **`Flows/` contains obsolete boards that encode known defects.** See `rules.md` §4 before
 opening anything in there. Flow `05` still shows the HMAC scheme that was a security flaw; flow
 `10` still shows the broken score normalisation.

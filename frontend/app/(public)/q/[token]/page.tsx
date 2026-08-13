@@ -14,8 +14,9 @@
  */
 
 import { notFound } from 'next/navigation'
-import { hashToken, withContext } from '@sophep/backend'
+import { hashToken, parseQrPayload, withContext } from '@sophep/backend'
 import { StatusBand, type UiState } from '@/components/state/StateBadge'
+import { LiveStatus } from './LiveStatus'
 
 export const dynamic = 'force-dynamic'
 
@@ -37,12 +38,19 @@ interface StatusView {
  * only, and enforces revocation and expiry itself (migration 0011).
  */
 async function loadStatus(rawToken: string): Promise<StatusView | null> {
-  // The QR payload is `<token>.<signature>` from Phase 2 onward. Strip any signature so a
-  // Phase 2 QR still resolves here.
-  const token = rawToken.split('.')[0] ?? ''
-  if (!token) return null
+  // The QR payload is `<token>.<signature>` from Phase 2 onward, and parseQrPayload is the one
+  // definition of that shape — it strips the signature, tolerates the full URL form a phone
+  // camera hands over, and enforces the 22-character base64url token format.
+  //
+  // This used to be `rawToken.split('.')[0]`, which accepted anything at all and passed it to
+  // hashToken. Harmless in itself (an arbitrary string hashes to a value no row matches), but
+  // it meant the page and `/api/q/:token/status` disagreed about what a token IS — and two
+  // definitions of a credential's format is how one of them eventually gets it wrong
+  // (audit M-14).
+  const parsed = parseQrPayload(rawToken)
+  if (!parsed) return null
 
-  const tokenHash = hashToken(token)
+  const tokenHash = hashToken(parsed.token)
 
   return withContext({}, async (tx) => {
     const rows = await tx<
@@ -105,6 +113,27 @@ export default async function StatusPage({ params }: { params: Promise<{ token: 
     guidance: 'Your status page will update automatically.',
   }
 
+  // Pre-event states render statically — there is no queue to poll and nothing that changes
+  // second to second, so a polling loop would be noise.
+  const preEvent = ['submitted', 'eligible', 'screened_out', 'withdrawn'].includes(status.state)
+
+  if (!preEvent) {
+    return (
+      <LiveStatus
+        token={token}
+        initial={{
+          state: status.state,
+          displayId: status.displayId,
+          position: null,
+          roomName: null,
+          estimate: { kind: 'suppressed', message: '' },
+          graceExpiresAt: null,
+          graceExtended: false,
+        }}
+      />
+    )
+  }
+
   return (
     <div className="mx-auto flex min-h-dvh max-w-md flex-col gap-5 p-5">
       {/* 1. ID chip — mono, always visible, top of screen (§19.1) */}
@@ -118,19 +147,16 @@ export default async function StatusPage({ params }: { params: Promise<{ token: 
       {/* 2. Status band — full width, state-coloured, icon + one line */}
       <StatusBand state={view.state} headline={view.headline} />
 
-      {/* 3+4. "The one number" lands here in Phase 2: queue position, or the room number when
-          called. Until a queue exists there is genuinely no number to show, and inventing one
-          would violate the honesty principle this design is built on. */}
+      {/* 3+4. No "one number" before the event: there is genuinely no position to show, and
+          inventing one would violate the honesty principle this design is built on. */}
 
       {/* 5. Guidance — one sentence, plain language */}
       <p className="text-body">{view.guidance}</p>
 
       <div className="mt-auto space-y-1 border-t border-border pt-4">
         <p className="text-small text-text-muted">{status.fullName}</p>
-        {/* 6. Liveness. Phase 1 is a static render, so it says so. Presenting a static page as
-            live would be exactly the lie principle 2 exists to prevent. */}
         <p className="text-caption text-text-muted">
-          Updated just now · live updates begin on interview day
+          Live updates begin when you check in on interview day
         </p>
       </div>
     </div>

@@ -162,7 +162,7 @@ export async function register(
         ${input.phone},
         ${input.source}::registration_channel,
         ${input.rollNumber ?? null},
-        ${JSON.stringify(input.answers)}::jsonb,
+        ${tx.json(input.answers as Parameters<typeof tx.json>[0])}::jsonb,
         ${input.preferences.length ? input.preferences : null}::uuid[],
         ${input.overrideReason ?? null},
         ${input.needsCompletion}

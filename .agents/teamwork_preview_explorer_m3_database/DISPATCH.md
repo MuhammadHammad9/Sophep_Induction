@@ -1,0 +1,2 @@
+## 2026-08-12T01:47:25Z
+Conduct a senior-level code audit of the database schema, SQL migrations (`backend/supabase/migrations/`), database scripts (`backend/scripts/migrate.mjs`), stored procedures (`fn_register_applicant`, `fn_claim_next`, `fn_run_allocation`, `fn_audit`, etc.), triggers, index strategies, Row Level Security (RLS) policies, concurrency safety (`FOR UPDATE SKIP LOCKED`), and fail-closed context binding (`R-014`). Note any migration naming anomalies (e.g. duplicate prefixes `0030_*` and `0031_*`) and potential SQL performance bottlenecks.

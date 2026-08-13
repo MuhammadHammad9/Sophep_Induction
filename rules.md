@@ -107,6 +107,17 @@ membership in the cached roster → Ed25519 signature against the cycle **public
 Verifying one offline requires shipping the signing secret to every volunteer's phone, and
 anyone who extracted it could mint unlimited valid SOPHEP QR codes. This was v1's worst defect.*
 
+**`R-021a` [BLOCKING]** The offline roster bundle carries the MINIMUM that `FR-CHK-009`'s three
+search modes need — applicant id, display id, name, the **final four** phone digits, token hash,
+department preference codes — plus the cycle **public** key. Never a full phone number, never an
+email, and never anything evaluative: no scores, no adjusted scores, no flags, no decisions, no
+offers, no evaluations. Adding a column to `fn_roster_bundle_v2` is a privacy decision, not a
+convenience. *(FR-CHK-009, FR-CHK-018, RSK-006, migration `0050`)*
+*Why: this is the whole cohort's identity sitting in IndexedDB on a volunteer's personal phone.
+`FR-CHK-018` says "hashes only", which cannot be reconciled with `FR-CHK-009`'s mandatory
+offline search by name and phone — that conflict is decided in `ROADMAP.md` and the TRD is
+wrong. What survives from its intent is this list, and the fact that the list is short.*
+
 **`R-022`** Never persist a raw token. Store `sha256(token)` only — not in the database, not in
 logs, not in backups, not in error output. *(FR-IDT-006, NFR-SEC-004)*
 *Why: a database leak must yield no working QR codes and no working status links.*
@@ -213,6 +224,23 @@ first-order cost. A new cycle must never require an engineer.*
 replays the stored response; same key + different hash returns 409. *(FR-OPS-004, FR-CHK-008)*
 *Why: this one mechanism makes the flaky-network double-tap harmless and offline replay safe by
 construction.*
+
+**`R-051a` [BLOCKING]** Replay state lives in the `idempotency_keys` TABLE, via
+`withIdempotency` from `backend/src/services/idempotency.ts`. Never in process memory.
+*Why: this was an in-memory `Map` for three phases. On Vercel each instance has its own and it
+is discarded on restart, so a device replaying an offline queue hits several instances, none
+recognises a replay, and duplicates are created — while passing every local test, because one
+dev server is one instance. `FR-CHK-014` requires "100% reconciliation, zero duplicates", which
+is a claim only the database can make.*
+
+**`R-051b` [BLOCKING]** The transaction is OUTER and the idempotency claim is INSIDE it, so the
+claim and the work it guards commit or roll back together. Never store a raw token, a status
+URL, or any other credential in the idempotent response — that value is persisted to
+`idempotency_keys.response_body` (`R-022`).
+
+**`R-051c`** A 409 on replay means the operation NEVER LANDED. Never treat it as success and
+never delete the queued operation — that is the silent discard `FR-CHK-015` prohibits. Surface
+it for reconciliation.
 
 **`R-052`** Cite requirement IDs in commit messages for the requirements implemented
 (e.g. `feat(queue): atomic claim with SKIP LOCKED (FR-QUE-002, R-013)`).
