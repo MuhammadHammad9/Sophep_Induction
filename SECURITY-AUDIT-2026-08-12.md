@@ -300,18 +300,58 @@ Each was invisible to parsing, typechecking and review. They are the argument fo
 
 ### What is still not proven
 
-- **Nothing has been applied to your live Supabase project**, and that is the only item left.
-  It is not a gap in the work; it is a deliberate stop. These migrations are irreversible in
-  places — `DROP FUNCTION`, `DROP COLUMN secret_params_enc`, a data move, privilege revocations
-  — and they run against real applicant PII. That needs an explicit go-ahead, not an inference.
-
-  The rollout is now a prepared, one-command step rather than a leap. See below.
+- Nothing outstanding. **The live Supabase project is migrated and verified** — see §0c.
 - **Nothing has been applied to your live Supabase project.** `DATABASE_URL` in `.env` points at
   production and the RLS suite drops the schema, so every run above used a throwaway database.
   Applying these 14 new migrations to production is a deliberate act, and it is yours to take.
 - **H-9 remains a design decision, not a defect.** The Realtime path is disabled and falls
   through to honest polling, which removes the hazard. Turning live updates on for real needs a
   choice between Supabase Realtime Authorization and an authenticated SSE endpoint.
+
+---
+
+## 0c. DEPLOYED — verified against the live project, 2026-08-13
+
+Applied with the user's explicit go-ahead, preflight first.
+
+**Preflight found the target already at 50/51** — the concurrent work had applied most of the
+set — with only `0051` pending. It also reported *"78 functions EXECUTE-able by PUBLIC"*, which
+looked like C-2 still being open. It was not: all 78 are Supabase's own `citext`/`pg_trgm`
+operators, owned by `supabase_admin`, which we neither own nor should revoke — doing so would
+break every citext comparison and trigram index in the schema. **All 87 application functions
+were correctly locked.** The check was fixed to scope by ownership before proceeding: a security
+tool that cries wolf invites someone to "fix" it and break the database.
+
+`0051` ran as a no-op — `notifications` was empty, so no token had ever been persisted on this
+database. A read-only snapshot was taken first regardless.
+
+### The exploits, run against the live project with the public anon key
+
+| Attack | Before | Now |
+|---|---|---|
+| `rpc/fn_export_selected` — every selected applicant's name + score | would return them | **401** `42501 permission denied` |
+| `rpc/fn_roster_bundle_v2` — the whole cohort's identities | would return them | **401** `42501` |
+| `rpc/fn_run_allocation` — rewrite every decision | would run | **401** `42501` |
+| `rpc/fn_anonymise_old_data` — destroy PII | would run | **401** `42501` |
+| `GET /users` — staff directory incl. `totp_secret_enc` | would return it | **401** `42501` |
+| `GET /applicants`, `GET /notifications` | would return them | **401** `42501` |
+
+### Post-migration state of the live database
+
+```
+51 applied, 0 pending, 51 on disk
+[ok] no applied migration has been edited (R-053)
+[ok] no application function is EXECUTE-able by PUBLIC
+[ok] no SECURITY DEFINER function is EXECUTE-able by PUBLIC
+[ok] anon can reach no application table or function
+[ok] authenticated can reach no application table or function
+[ok] every table has row-level security enabled
+[ok] no raw access token stored in a notification body
+```
+
+**Still required before the event:** re-deploy the frontend. The application code and the schema
+are a matched pair — `fn_enqueue_notification` gained a parameter and its 6-argument form is
+dropped, so a frontend built before this schema will fail on registration.
 
 ---
 
