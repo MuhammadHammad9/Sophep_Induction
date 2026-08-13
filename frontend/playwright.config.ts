@@ -5,6 +5,16 @@ import { defineConfig, devices } from '@playwright/test';
  */
 export default defineConfig({
   testDir: './tests/e2e',
+
+  /**
+   * Seeds the staff fixture the signed-in specs need.
+   *
+   * These specs passed locally and failed in CI, and the difference was that the staff row had
+   * been inserted by hand on the local machine. CI starts from a migrated but empty database,
+   * so requireStaff correctly found no membership and redirected — the boundary working, and
+   * the setup being wrong. Seeding here makes both environments identical.
+   */
+  globalSetup: './tests/e2e/support/seed-e2e.mjs',
   /* Run tests in files in parallel */
   fullyParallel: true,
   /* Fail the build on CI if you accidentally left test.only in the source code. */
