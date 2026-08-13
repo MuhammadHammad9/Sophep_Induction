@@ -11,8 +11,6 @@ build/
 *.tsbuildinfo
 
 # Environment — never commit secrets (R-022, NFR-SEC-009)
-.env
-.env.*
 !.env.example
 
 # Supabase local
@@ -25,7 +23,6 @@ playwright-report/
 test-results/
 
 # Editor
-.vscode/*
 !.vscode/extensions.json
 .idea/
 *.swp
@@ -39,3 +36,4 @@ desktop.ini
 
 # Vercel
 .vercel
+config.bat

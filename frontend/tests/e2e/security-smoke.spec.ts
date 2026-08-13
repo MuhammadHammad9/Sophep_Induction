@@ -97,8 +97,13 @@ test.describe('security smoke — the things only a browser can see', () => {
 
     // A revoked, expired and unknown token must be indistinguishable. Confirming that a token
     // merely expired tells an attacker their guess was structurally valid (NFR-PRIV-005).
-    const body = await page.content()
-    expect(body).not.toMatch(/expired|revoked|not found in|stack/i)
+    //
+    // Asserted over VISIBLE TEXT, not `page.content()`. The raw HTML carries Next's own script
+    // bundles, and matching `/stack/i` against a chunk filename failed the test while the page
+    // leaked nothing — a false positive that would train someone to delete the assertion. What
+    // is being checked is what a person can READ.
+    const visible = await page.locator('body').innerText()
+    expect(visible).not.toMatch(/expired|revoked|invalid token|no such|stack trace|at \w+\s\(/i)
   })
 })
 
