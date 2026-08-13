@@ -17,6 +17,7 @@
     "test:concurrency": "vitest run tests/concurrency",
     "test:golden": "vitest run tests/golden",
     "test:schema": "vitest run tests/schema",
+    "db:preflight": "node --env-file=../.env scripts/preflight.mjs",
     "db:migrate": "node --env-file=../.env scripts/migrate.mjs",
     "db:reset": "supabase db reset",
     "db:seed": "node --env-file=../.env scripts/seed.mjs",

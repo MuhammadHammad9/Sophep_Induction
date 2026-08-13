@@ -61,13 +61,28 @@ export default async function FastTrackPage() {
   // one deployment would otherwise cross-contaminate, and the previous LIMIT 1 over all cycles
   // picked an arbitrary one.
   const target = await withContext(staff.context, async (tx): Promise<StageTarget | null> => {
+    // `stages` HAS NO `state` OR `start_time` COLUMN.
+    //
+    // It carries `starts_at`, `ends_at` and `closed_at`, and "active" is derived from them —
+    // there is no status field to compare against. The previous query said
+    // `s.state = 'active'` and `ORDER BY s.start_time`, both of which raise
+    // `column does not exist` at runtime, so this page returned a 500 for every authenticated
+    // staff member. It could not have been caught by typecheck (the SQL is a template string)
+    // and was not caught by any test, because nothing had ever loaded this page while signed
+    // in — the signed-in flow was the one gap in the browser suite.
+    //
+    // An open stage is one that has started and has not been closed. `ends_at` is the planned
+    // finish; a stage running late is still open until somebody closes it, which is the
+    // behaviour the floor actually needs (FR-OPS-006).
     const rows = await tx<Array<{ cycle_id: string; cycle_name: string; stage_id: string }>>`
       SELECT c.id AS cycle_id, c.name AS cycle_name, s.id AS stage_id
         FROM cycles c
-        JOIN stages s ON s.cycle_id = c.id AND s.state = 'active'
+        JOIN stages s ON s.cycle_id = c.id
        WHERE c.id = ${staff.cycleId}::uuid
          AND c.state IN ('registration_open', 'interviews_active')
-       ORDER BY s.start_time ASC
+         AND s.closed_at IS NULL
+         AND s.starts_at <= now()
+       ORDER BY s.starts_at DESC
        LIMIT 1
     `
     const row = rows[0]

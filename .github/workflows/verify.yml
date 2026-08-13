@@ -116,10 +116,17 @@ jobs:
       # page arrived and then did nothing.
       #
       # Verified to actually catch it: reintroducing the broken CSP turns these red.
-      - name: Browser security smoke (CSP, hydration, auth gates)
+      - name: Browser suite (CSP, hydration, auth gates, PWA, signed-in flow)
         run: |
           npx playwright install --with-deps chromium
+          node tests/e2e/support/auth-stub.mjs 54321 &
           npm run test:e2e
         working-directory: frontend
         env:
           NEXT_PUBLIC_SITE_URL: http://localhost:3000
+          # Points the app's auth client at the stub. The APPLICATION is unchanged — the
+          # external dependency is doubled, the same way the email provider already is. A
+          # TEST_MODE flag that skipped auth would be a supported way to bypass the boundary
+          # this whole suite exists to defend.
+          NEXT_PUBLIC_SUPABASE_URL: http://127.0.0.1:54321
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: e2e-anon

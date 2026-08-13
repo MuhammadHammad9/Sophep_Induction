@@ -78,7 +78,7 @@ Every suite now runs, and all of them pass.
 | `npm run test:rls` — policy boundary | **real PostgreSQL 18.4 server** | **94 passed** |
 | `npm run test:concurrency` — 20 actors | **real PostgreSQL 18.4 server** | **38 passed** |
 | `npm run test:golden` — determinism | **real PostgreSQL 18.4 server** | **54 passed** |
-| `npm run test:e2e` — CSP, hydration, auth gates, PWA | **real Chromium** | **12 passed**, 1 fixme |
+| `npm run test:e2e` — CSP, hydration, auth gates, PWA, signed-in flow | **real Chromium** | **16 passed** |
 
 All **51 migrations** apply cleanly to both engines from an empty database, and to a
 database that already ran earlier ones.
@@ -161,6 +161,45 @@ the next person to fix the failing test would have reopened the hole to make it 
 unauthenticated case is now asserted as a refusal (page redirect **and** a 401 from the API);
 the signed-in flow is `fixme` pending a staff auth fixture rather than deleted, so the FR-CHK-010
 coverage is not quietly lost.
+
+### The signed-in flow is covered, without weakening the boundary
+
+Every other browser test asserts a REFUSAL — which is the important half, and also the half a
+completely broken app would pass: a server returning 401 to everything satisfies all of them.
+Nothing demonstrated that a legitimate staff member can get in, and for most of this project's
+life they could not (H-6, the bootstrap deadlock).
+
+`requireStaff` calls `supabase.auth.getUser()`, which verifies a JWT against Supabase's auth
+server, so a signed-in test needs one. The tempting shortcut is a `TEST_MODE` flag that skips
+auth — a supported way to skip the exact boundary this audit exists to defend, one environment
+variable from production. Instead the **external dependency is doubled** and the application is
+untouched, which is what `services/notifications.ts` already does for email. Everything
+downstream is real: real cookie parsing by `@supabase/ssr`, real `fn_resolve_staff_session`,
+real capability lookup, real RLS.
+
+The full FR-CHK-010 walk-in now runs through the actual UI, and the database shows the result:
+
+```
+SPH-SP26-0001 | E2E Walkin … | source walkin_digital | state queued
+queue entries: 1
+check-ins: register_and_checkin 1
+audit: applicant.registered, token.issued, applicant.checked_in, queue.enqueued
+```
+
+`source walkin_digital` is the C-1 typo fix working — before it, every request was rejected as
+`walk_in_digital`. Four audit rows in the same transaction is R-011 holding on a real write.
+
+### That test immediately found another defect
+
+The fast-track page queried `stages.state = 'active'` and `ORDER BY s.start_time`. **Neither
+column exists** — `stages` carries `starts_at`, `ends_at` and `closed_at`, and "open" is derived
+from them. The page therefore returned a 500 to every authenticated staff member.
+
+It could not have been caught by typecheck (the SQL is a template string), and no test caught it
+because nothing had ever loaded that page while signed in. The predecessor had the same bug, so
+it had been broken the whole time behind an auth gate nobody could pass. Now: open means started
+and not closed, with `ends_at` treated as a plan rather than a deadline — a stage running late
+is still open until somebody closes it, which is what the floor needs.
 
 ### Offline capability is now verified too
 
@@ -261,19 +300,70 @@ Each was invisible to parsing, typechecking and review. They are the argument fo
 
 ### What is still not proven
 
-- **No signed-in click-through.** This is the last one, and it is blocked on environment rather
-  than effort. `requireStaff` calls `supabase.auth.getUser()`, which verifies the JWT against a
-  real Supabase Auth server; there is no local Supabase here (it needs Docker) and Playwright's
-  request interception cannot reach a *server-side* fetch. The honest options are a real
-  Supabase project or a local stack — **not** a test-only auth bypass, which would be a
-  deliberate hole in the boundary this whole audit exists to close. Tracked as the `fixme` in
-  `walk-in.spec.ts`.
+- **Nothing has been applied to your live Supabase project**, and that is the only item left.
+  It is not a gap in the work; it is a deliberate stop. These migrations are irreversible in
+  places — `DROP FUNCTION`, `DROP COLUMN secret_params_enc`, a data move, privilege revocations
+  — and they run against real applicant PII. That needs an explicit go-ahead, not an inference.
+
+  The rollout is now a prepared, one-command step rather than a leap. See below.
 - **Nothing has been applied to your live Supabase project.** `DATABASE_URL` in `.env` points at
   production and the RLS suite drops the schema, so every run above used a throwaway database.
   Applying these 14 new migrations to production is a deliberate act, and it is yours to take.
 - **H-9 remains a design decision, not a defect.** The Realtime path is disabled and falls
   through to honest polling, which removes the hazard. Turning live updates on for real needs a
   choice between Supabase Realtime Authorization and an authenticated SSE endpoint.
+
+---
+
+## 0b. Rollout — how to apply this to the live database
+
+Nothing here has been run against your Supabase project. When you decide to, this is the order,
+and the first two steps write nothing.
+
+**1. Look before you leap.** `npm run db:preflight` is strictly read-only — no DDL, no DML, not
+even a ledger row. Safe to run against production at any time, including during an event. It
+reports which migrations would run, whether any *applied* migration has been edited since
+(R-053, the thing that silently breaks a replay), and the security posture as it stands, so you
+can see the "before" picture:
+
+```bash
+npm run db:preflight
+```
+
+On an unmigrated target the security lines come back as `[WARN]` — those are this audit's own
+findings, and they are what applying the migrations fixes. Verified end to end on a throwaway
+database: every `[WARN]` becomes `[ok]` afterwards.
+
+**2. Take a backup.** Supabase dashboard → Database → Backups. Non-negotiable: migration 0047
+drops a column after moving its contents, and 0051 rewrites existing rows.
+
+**3. Apply.** `npm run db:migrate`. The ledger makes it resumable — a failure part-way leaves
+the completed migrations recorded, and re-running continues from there.
+
+**4. Re-run the preflight.** Every `[WARN]` should now read `[ok]`. That is the confirmation
+the perimeter actually closed on *your* data, not on a test fixture.
+
+**5. Re-deploy the frontend.** The application code and the schema are a matched pair — the
+routes call functions whose signatures changed (`fn_enqueue_notification` gained a parameter and
+its 6-argument form is dropped). Migrating without deploying breaks registration; deploying
+without migrating breaks it the other way.
+
+### One thing to decide before step 3
+
+Migration **0051** redacts raw access tokens from notification bodies that already exist. It
+cannot recover the original tokens — only their sha256 is stored, by design — so:
+
+- Notifications already **sent** are redacted in place. Harmless: the applicant has the real
+  link in their inbox.
+- Notifications still **pending** are redacted *and marked `failed`*, because sending them after
+  redaction would deliver a literal `{{statusUrl}}` and no way to reach the status page.
+
+If you have pending confirmations you care about, note who they are first — they will need
+re-enqueueing with freshly issued tokens, which rotates a live credential and is deliberately
+left as an operator action rather than something a migration does silently.
+
+Demonstrated on a seeded copy of the pre-fix state: 2 token-bearing bodies → 0, the sent one
+redacted, the pending one failed with a reason, and one audit row recording the counts.
 
 ---
 

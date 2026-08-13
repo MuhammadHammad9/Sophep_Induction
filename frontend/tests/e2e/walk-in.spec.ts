@@ -51,26 +51,9 @@ test.describe('fast-track is staff-only', () => {
   })
 })
 
-test.describe('walk-in registration, signed in', () => {
-  test.fixme(
-    true,
-    'needs a signed-in staff fixture: magic-link callback plus the MFA challenge (H-6)',
-  )
-
-  test('registers a walk-in and checks them into the queue', async ({ page }) => {
-    await page.goto('/fast-track')
-    await expect(page.locator('h1')).toContainText('Fast-Track')
-
-    await page.fill('input[name="full_name"]', 'Test Walkin Applicant')
-    await page.fill('input[name="email"]', `walkin-${Date.now()}@example.com`)
-    await page.fill(
-      'input[name="phone"]',
-      `03${String(Math.floor(Math.random() * 900000000 + 100000000))}`,
-    )
-
-    await page.click('button[type="submit"]')
-
-    await expect(page.locator('.success-message')).toBeVisible({ timeout: 10000 })
-    await expect(page.locator('.success-message')).toContainText('Checked in')
-  })
-})
+/**
+ * The signed-in half of FR-CHK-010 now lives in `signed-in.spec.ts`, which drives it through
+ * the real UI against a doubled auth server and asserts the resulting rows. It is not
+ * duplicated here — a permanently-skipped test reads as missing coverage when the coverage
+ * exists, which is its own kind of dishonest reporting.
+ */

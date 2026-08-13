@@ -22,6 +22,7 @@
     "test:e2e": "npm run test:e2e --workspace=@sophep/frontend",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present",
+    "db:preflight": "npm run db:preflight --workspace=@sophep/backend",
     "db:migrate": "npm run db:migrate --workspace=@sophep/backend",
     "db:reset": "npm run db:reset --workspace=@sophep/backend",
     "db:seed": "npm run db:seed --workspace=@sophep/backend",
